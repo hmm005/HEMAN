@@ -1,22 +1,26 @@
 require('dotenv').config();
+const cron = require('node-cron');
+const fs = require('fs');
+const path = require('path');
+const { runFullScan } = require('./engine');
+require('./dashboard/server');
 
-const { startServer, setScanFunction, setStatusFunction } = require('./dashboard/server');
-const { startScheduler, doScan, getStatus } = require('./scheduler');
+const WATCHLISTS_PATH = path.join(__dirname, '../config/watchlists.json');
+const loadWatchlists = () => JSON.parse(fs.readFileSync(WATCHLISTS_PATH, 'utf8'));
+const scan = async () => { const wl = loadWatchlists(); if (wl.length) await runFullScan(wl); };
 
-console.log(`
-╔══════════════════════════════════════════════╗
-║          🚨 DEAL ALERT DASHBOARD 🚨          ║
-║     Heman McCray | Elevate Home Solutions    ║
-╚══════════════════════════════════════════════╝
-`);
+const mins = parseInt(process.env.SCAN_INTERVAL_MINUTES)||30;
+const active = loadWatchlists().filter(w=>w.active!==false).map(w=>w.name);
 
-// Wire up scan trigger from dashboard
-setScanFunction(doScan);
-setStatusFunction(getStatus);
+console.log('\n╔══════════════════════════════════════════════════════╗');
+console.log('║        DEAL DASHBOARD — ELEVATE HOME SOLUTIONS       ║');
+console.log('╚══════════════════════════════════════════════════════╝');
+console.log(`\n  Dashboard:  http://localhost:${process.env.PORT||3000}`);
+console.log(`  Scan every: ${mins} minutes`);
+console.log(`  Watching:   ${active.join(', ')||'none'}`);
+console.log('  Twilio:     '+(process.env.TWILIO_ACCOUNT_SID?.startsWith('AC')?'✅ Ready':'⚠️  Add to .env'));
+console.log('  eBay API:   '+(process.env.EBAY_APP_ID&&!process.env.EBAY_APP_ID.includes('YourApp')?'✅ Ready':'⚠️  Add to .env'));
+console.log('\n');
 
-// Start Express dashboard
-const port = process.env.PORT || 3000;
-startServer(port);
-
-// Start scan scheduler
-startScheduler();
+scan();
+cron.schedule(`*/${mins} * * * *`, scan);

@@ -1,96 +1,55 @@
+require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const fs = require('fs');
-const database = require('../db/database');
+const db = require('../db/database');
+const { runFullScan } = require('../engine');
 
 const app = express();
+const PORT = process.env.PORT || 3000;
+const WATCHLISTS_PATH = path.join(__dirname, '../../config/watchlists.json');
+const loadWL = () => JSON.parse(fs.readFileSync(WATCHLISTS_PATH, 'utf8'));
+
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// API: Get listings
-app.get('/api/listings', (req, res) => {
-  const { limit = 100, offset = 0, source, watchlist } = req.query;
-  const listings = database.getRecentListings(
-    parseInt(limit),
-    parseInt(offset),
-    source || null,
-    watchlist || null
-  );
-  res.json(listings);
+app.get('/api/stats', (_, res) => res.json(db.getStats()));
+app.get('/api/alerts', (req, res) => {
+  const { limit=100, watchlist } = req.query;
+  res.json(watchlist ? db.getAlertsByWatchlist(watchlist, +limit) : db.getRecentAlerts(+limit));
 });
-
-// API: Get stats
-app.get('/api/stats', (req, res) => {
-  res.json(database.getStats());
-});
-
-// API: Get watchlists
-app.get('/api/watchlists', (req, res) => {
-  const configPath = path.join(__dirname, '../../config/watchlists.json');
-  const watchlists = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-  res.json(watchlists);
-});
-
-// API: Add watchlist
+app.get('/api/watchlists', (_, res) => res.json(loadWL()));
 app.post('/api/watchlists', (req, res) => {
-  const configPath = path.join(__dirname, '../../config/watchlists.json');
-  const watchlists = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-  const newWatchlist = {
-    id: req.body.id || req.body.name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, ''),
-    active: true,
-    ...req.body,
-  };
-  watchlists.push(newWatchlist);
-  fs.writeFileSync(configPath, JSON.stringify(watchlists, null, 2));
-  res.json({ ok: true, watchlist: newWatchlist });
+  try {
+    const wl = loadWL();
+    const item = { ...req.body, id: Date.now().toString(), active: true };
+    wl.push(item);
+    fs.writeFileSync(WATCHLISTS_PATH, JSON.stringify(wl, null, 2));
+    res.json({ success: true, watchlist: item });
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
-
-// API: Toggle watchlist active state
-app.patch('/api/watchlists/:id', (req, res) => {
-  const configPath = path.join(__dirname, '../../config/watchlists.json');
-  const watchlists = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-  const idx = watchlists.findIndex((w) => w.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ error: 'Not found' });
-  Object.assign(watchlists[idx], req.body);
-  fs.writeFileSync(configPath, JSON.stringify(watchlists, null, 2));
-  res.json({ ok: true, watchlist: watchlists[idx] });
+app.put('/api/watchlists/:id', (req, res) => {
+  try {
+    const wl = loadWL();
+    const i = wl.findIndex(w => w.id === req.params.id);
+    if (i===-1) return res.status(404).json({ error:'Not found' });
+    wl[i] = { ...wl[i], ...req.body };
+    fs.writeFileSync(WATCHLISTS_PATH, JSON.stringify(wl, null, 2));
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
-
-// API: Trigger scan
-let scanFn = null;
-app.post('/api/scan', async (req, res) => {
-  if (!scanFn) return res.status(503).json({ error: 'Scanner not initialized' });
-  res.json({ ok: true, message: 'Scan triggered' });
-  scanFn();
+app.delete('/api/watchlists/:id', (req, res) => {
+  try {
+    const wl = loadWL().filter(w => w.id !== req.params.id);
+    fs.writeFileSync(WATCHLISTS_PATH, JSON.stringify(wl, null, 2));
+    res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
-
-// API: Scheduler status
-let statusFn = null;
-app.get('/api/status', (req, res) => {
-  const status = statusFn ? statusFn() : { isScanning: false };
-  res.json(status);
+app.post('/api/scan', (_, res) => {
+  res.json({ message: 'Scan started' });
+  runFullScan(loadWL()).catch(console.error);
 });
+app.delete('/api/alerts/clear', (_, res) => { db.clearAll(); res.json({ success: true }); });
 
-function setScanFunction(fn) {
-  scanFn = fn;
-}
-
-function setStatusFunction(fn) {
-  statusFn = fn;
-}
-
-function startServer(port) {
-  const p = port || process.env.PORT || 3000;
-  app.listen(p, () => {
-    console.log(`\n🖥️  Dashboard running at http://localhost:${p}`);
-  });
-  return app;
-}
-
-// If run directly
-if (require.main === module) {
-  require('dotenv').config({ path: path.join(__dirname, '../../.env') });
-  startServer();
-}
-
-module.exports = { app, startServer, setScanFunction, setStatusFunction };
+app.listen(PORT, () => console.log(`🖥️  Dashboard → http://localhost:${PORT}`));
+module.exports = app;

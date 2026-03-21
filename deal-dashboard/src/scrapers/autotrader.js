@@ -1,60 +1,43 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
-const { extractYear, extractMileage, extractPrice } = require('../alerts/matcher');
+const delay = ms => new Promise(r => setTimeout(r, ms));
 
-async function scrape(watchlist) {
-  if (watchlist.type !== 'vehicle') return [];
-
-  const listings = [];
-  const keywords = watchlist.keywords.join('+');
-
+async function searchAutoTrader(watchlist) {
+  const results = [];
+  if (watchlist.type !== 'vehicle') return results;
   try {
-    const url = `https://www.autotrader.com/cars-for-sale/all-cars?` +
-      `searchRadius=500&zip=35209&keyword=${encodeURIComponent(keywords)}` +
-      `&startYear=${watchlist.minYear || ''}&endYear=${watchlist.maxYear || ''}` +
-      `&minPrice=${watchlist.minPrice || ''}&maxPrice=${watchlist.maxPrice || ''}` +
-      `&sortBy=derivedpriceDESC&numRecords=25`;
+    const url = new URL('https://www.autotrader.com/cars-for-sale/all-cars');
+    url.searchParams.set('searchRadius','500'); url.searchParams.set('zip','35004');
+    url.searchParams.set('query',watchlist.keywords[0]);
+    if (watchlist.maxPrice) url.searchParams.set('maxPrice',watchlist.maxPrice);
+    if (watchlist.minPrice) url.searchParams.set('minPrice',watchlist.minPrice);
+    if (watchlist.minYear) url.searchParams.set('startYear',watchlist.minYear);
+    if (watchlist.maxYear) url.searchParams.set('endYear',watchlist.maxYear);
+    url.searchParams.set('sortBy','relevance'); url.searchParams.set('numRecords','25');
 
-    const { data } = await axios.get(url, {
-      timeout: 15000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml',
-      },
+    const { data } = await axios.get(url.toString(), {
+      headers: { 'User-Agent':'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36', 'Accept':'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8', 'Referer':'https://www.autotrader.com/' },
+      timeout: 15000
     });
-
     const $ = cheerio.load(data);
-
-    $('[data-cmp="inventoryListing"], .inventory-listing').each((_, el) => {
+    $('[data-cmp="listingCard"], .inventory-listing').each((_, el) => {
       const $el = $(el);
-      const title = $el.find('h2, .text-bold').first().text().trim();
-      const priceText = $el.find('[data-cmp="firstPrice"], .first-price').text().trim();
-      const mileageText = $el.find('.item-card-specifications, .text-subdued').text().trim();
-      const link = $el.find('a').attr('href') || '';
-
-      if (!title) return;
-
-      const fullUrl = link.startsWith('http') ? link : `https://www.autotrader.com${link}`;
-
-      listings.push({
-        id: `at-${Buffer.from(fullUrl).toString('base64').slice(-20)}`,
-        source: 'AutoTrader',
-        title,
-        price: extractPrice(priceText),
-        url: fullUrl,
-        location: '500mi from Birmingham',
-        year: extractYear(title),
-        mileage: extractMileage(mileageText),
-        isAuction: false,
+      const title = $el.find('h2, [data-cmp="heading"]').first().text().trim();
+      const price = parseInt(($el.find('[data-cmp="firstPrice"], .price-section').first().text().trim()).replace(/[^0-9]/g,''))||0;
+      const href = $el.find('a').first().attr('href');
+      const listingId = href?.match(/\/(?:cars-for-sale|car-details)\/[^/]+\/(\d+)/)?.[1]||href?.split('/').filter(Boolean).pop();
+      if (!listingId || !title) return;
+      results.push({
+        id:`autotrader-${listingId}`, source:'AutoTrader', watchlistId:watchlist.id, watchlistName:watchlist.name,
+        title, price, url:href?.startsWith('http')?href:`https://www.autotrader.com${href}`,
+        location:$el.find('[data-cmp="distance"]').text().trim(),
+        mileage:$el.find('[data-cmp="mileage"]').text().trim(),
+        postedAt:new Date().toISOString(), isAuction:false
       });
     });
-
-    console.log(`  [AutoTrader] Found ${listings.length} listings`);
-  } catch (err) {
-    console.error(`  [AutoTrader] Error: ${err.message}`);
-  }
-
-  return listings;
+    await delay(2000);
+  } catch(e) { console.error('[AutoTrader]', e.message); }
+  return results;
 }
 
-module.exports = { scrape };
+module.exports = { searchAutoTrader };

@@ -3,36 +3,26 @@
     "id": "lbz-duramax",
     "name": "2006-2007 LBZ Duramax Diesel",
     "type": "vehicle",
-    "keywords": ["LBZ", "Duramax", "6.6 diesel", "6.6L"],
+    "keywords": ["LBZ", "Duramax", "6.6 diesel", "6.6L diesel"],
     "titleMustContain": ["LBZ"],
     "minYear": 2006,
     "maxYear": 2007,
     "minPrice": 8000,
     "maxPrice": 45000,
-    "sources": [
-      "craigslist", "ebay", "autotrader", "cargurus", "cars_com",
-      "carsforsale", "hemmings", "truckpaper", "carsdirect",
-      "copart", "iaai", "govplanet"
-    ],
-    "craigslistCities": [
-      "birmingham", "huntsville", "tuscaloosa", "montgomery", "mobile",
-      "atlanta", "nashville", "memphis", "chattanooga", "knoxville",
-      "jackson_ms", "gulfport", "tupelo", "columbus_ga", "macon"
-    ],
-    "active": true
+    "sources": ["craigslist","ebay","autotrader","cargurus","cars_com","copart","iaai","govplanet","publicsurplus","carsforsale","hemmings","truckpaper","carsdirect"],
+    "craigslistCities": ["birmingham","huntsville","atlanta","nashville","memphis","chattanooga","knoxville","montgomery","jackson_ms","gadsden","anniston","tuscaloosa","columbus_ga","dothan","florence_al"],
+    "active": true,
+    "notes": "LBZ = pre-DEF pre-DPF most reliable Duramax ever built"
   },
   {
     "id": "laundromat",
     "name": "Laundromat for Sale",
     "type": "business",
-    "keywords": ["laundromat", "coin laundry", "washateria", "laundry business", "coin-op laundry"],
-    "titleMustContain": [],
-    "minPrice": 0,
+    "keywords": ["laundromat","laundry","coin laundry","washateria","coin-op laundry"],
     "maxPrice": 350000,
-    "sources": ["bizbuy", "bizquest", "craigslist"],
-    "craigslistCities": [
-      "birmingham", "huntsville", "tuscaloosa", "montgomery", "mobile", "atlanta"
-    ],
-    "active": true
+    "sources": ["bizbuysell","bizquest","craigslist"],
+    "craigslistCities": ["birmingham","huntsville","montgomery","gadsden","anniston","tuscaloosa"],
+    "active": true,
+    "notes": "Primary cash-flow acquisition target"
   }
 ]

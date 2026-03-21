@@ -1,235 +1,124 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
-const { extractYear, extractMileage, extractPrice } = require('../alerts/matcher');
+const delay = ms => new Promise(r => setTimeout(r, ms));
 
-async function scrapeCopart(watchlist) {
-  if (watchlist.type !== 'vehicle') return [];
-  const listings = [];
-  const keywords = watchlist.keywords.join(' ');
-
+async function searchCopart(watchlist) {
+  const results = [];
+  if (watchlist.type !== 'vehicle') return results;
   try {
-    const url = `https://www.copart.com/public/lots/search`;
-    const { data } = await axios.post(url, {
-      query: keywords,
-      filter: {
-        YEAR: watchlist.minYear && watchlist.maxYear
-          ? [`${watchlist.minYear}`, `${watchlist.maxYear}`]
-          : undefined,
-      },
-      sort: ['auction_date_type desc'],
-      page: 0,
-      size: 25,
-    }, {
-      timeout: 15000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Content-Type': 'application/json',
-      },
-    });
+    const { data } = await axios.post('https://api.copart.com/public/lots/search', {
+      query:{ query:watchlist.keywords[0], bool:{} }, size:25, from:0,
+      sort:[{_score:'desc'}], aggs:{},
+      post_filter:{ bool:{ must:[{ match:{ lotDescription:watchlist.keywords[0] } }] } }
+    }, { headers:{ 'Content-Type':'application/json','User-Agent':'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36' }, timeout:12000 });
 
-    const items = data?.data?.results?.content || [];
-    for (const item of items) {
-      const title = item.lN || item.mkN + ' ' + item.mN || 'Unknown';
-      listings.push({
-        id: `copart-${item.ln || item.lotNumberStr || Math.random().toString(36).slice(2)}`,
-        source: 'Copart Auction',
-        title,
-        price: item.dynamicLotDetails?.currentBid || item.cB || null,
-        url: `https://www.copart.com/lot/${item.ln || item.lotNumberStr}`,
-        location: item.yN || item.facilityName || 'Copart',
-        year: item.lcy || extractYear(title),
-        mileage: item.orr || null,
-        isAuction: true,
-        auction_end: item.dynamicLotDetails?.saleDate || null,
+    for (const lot of (data?.data?.results?.content||[])) {
+      const price = lot.currentBid||lot.buyNowPrice||0;
+      if (watchlist.maxPrice && price > watchlist.maxPrice) continue;
+      const year = parseInt(lot.year)||null;
+      if (watchlist.minYear && year && year < watchlist.minYear) continue;
+      if (watchlist.maxYear && year && year > watchlist.maxYear) continue;
+      results.push({
+        id:`copart-${lot.lotNumberStr||lot.lotNumber}`, source:'Copart Auction',
+        watchlistId:watchlist.id, watchlistName:watchlist.name,
+        title:`${lot.year||''} ${lot.make||''} ${lot.model||''} ${lot.series||''}`.trim(),
+        price, url:`https://www.copart.com/lot/${lot.lotNumberStr||lot.lotNumber}`,
+        location:`${lot.yard?.city||''}, ${lot.yard?.stateCode||''}`.trim().replace(/^,\s*/,''),
+        year, mileage:lot.odometerReadingReceived?`${lot.odometerReadingReceived.toLocaleString()} mi`:'',
+        postedAt:new Date().toISOString(), isAuction:true, auctionEnd:lot.saleDate||null
       });
     }
-    console.log(`  [Copart] Found ${listings.length} listings`);
-  } catch (err) {
-    // Fallback: scrape search page
-    try {
-      const searchUrl = `https://www.copart.com/lotSearchResults/?free=true&query=${encodeURIComponent(keywords)}`;
-      const { data } = await axios.get(searchUrl, {
-        timeout: 15000,
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-      });
-      const $ = cheerio.load(data);
-      $('[data-uname="lotsearchLotmodel"]').each((_, el) => {
-        const title = $(el).text().trim();
-        const link = $(el).find('a').attr('href') || '';
-        if (title) {
-          listings.push({
-            id: `copart-${Buffer.from(link || title).toString('base64').slice(-20)}`,
-            source: 'Copart Auction',
-            title,
-            price: null,
-            url: link.startsWith('http') ? link : `https://www.copart.com${link}`,
-            location: 'Copart',
-            year: extractYear(title),
-            mileage: null,
-            isAuction: true,
-            auction_end: null,
-          });
-        }
-      });
-      console.log(`  [Copart/fallback] Found ${listings.length} listings`);
-    } catch (err2) {
-      console.error(`  [Copart] Error: ${err2.message}`);
-    }
-  }
-
-  return listings;
+    await delay(1500);
+  } catch(e) { console.error('[Copart]', e.message); }
+  return results;
 }
 
-async function scrapeIAAI(watchlist) {
-  if (watchlist.type !== 'vehicle') return [];
-  const listings = [];
-  const keywords = watchlist.keywords.join(' ');
-
+async function searchIAAI(watchlist) {
+  const results = [];
+  if (watchlist.type !== 'vehicle') return results;
   try {
-    const url = `https://www.iaai.com/Search?Keyword=${encodeURIComponent(keywords)}`;
-    const { data } = await axios.get(url, {
-      timeout: 15000,
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+    const kw = encodeURIComponent(watchlist.keywords[0]);
+    const { data } = await axios.get(`https://www.iaai.com/Search?SearchTerm=${kw}&IncludeSalvage=true&SortBy=SaleDate&SortOrder=ASC`, {
+      headers:{ 'User-Agent':'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }, timeout:15000
     });
-
     const $ = cheerio.load(data);
-    $('.table-row, .inventory-item').each((_, el) => {
-      const $el = $(el);
-      const title = $el.find('.heading-7, .vehicle-title').text().trim();
-      const priceText = $el.find('.bid-value, .current-bid').text().trim();
-      const link = $el.find('a').attr('href') || '';
-
-      if (!title) return;
-
-      const fullUrl = link.startsWith('http') ? link : `https://www.iaai.com${link}`;
-
-      listings.push({
-        id: `iaai-${Buffer.from(fullUrl).toString('base64').slice(-20)}`,
-        source: 'IAAI Auction',
-        title,
-        price: extractPrice(priceText),
-        url: fullUrl,
-        location: 'IAAI',
-        year: extractYear(title),
-        mileage: null,
-        isAuction: true,
-        auction_end: null,
+    $('.vehicle-card, [data-testid="vehicle-card"]').each((_,el) => {
+      const $el=$(el);
+      const title=$el.find('h2,[data-testid="vehicle-title"]').first().text().trim();
+      const price=parseInt(($el.find('.bid-price,.current-bid').text().trim()).replace(/[^0-9]/g,''))||0;
+      const href=$el.find('a').first().attr('href');
+      const id=href?.match(/\/(\d+)/)?.[1];
+      if (!id||!title) return;
+      results.push({
+        id:`iaai-${id}`, source:'IAAI Auction', watchlistId:watchlist.id, watchlistName:watchlist.name,
+        title, price, url:href?.startsWith('http')?href:`https://www.iaai.com${href}`,
+        location:$el.find('.location,.branch-name').text().trim(),
+        mileage:$el.find('.odometer,.mileage').text().trim(),
+        postedAt:new Date().toISOString(), isAuction:true,
+        auctionEnd:$el.find('.sale-date').text().trim()||null
       });
     });
-
-    console.log(`  [IAAI] Found ${listings.length} listings`);
-  } catch (err) {
-    console.error(`  [IAAI] Error: ${err.message}`);
-  }
-
-  return listings;
+    await delay(2000);
+  } catch(e) { console.error('[IAAI]', e.message); }
+  return results;
 }
 
-async function scrapeGovPlanet(watchlist) {
-  if (watchlist.type !== 'vehicle') return [];
-  const listings = [];
-  const keywords = watchlist.keywords.join(' ');
-
+async function searchGovPlanet(watchlist) {
+  const results = [];
+  if (watchlist.type !== 'vehicle') return results;
   try {
-    const url = `https://www.govplanet.com/for-sale/search?q=${encodeURIComponent(keywords)}&category=Pickup+Trucks`;
-    const { data } = await axios.get(url, {
-      timeout: 15000,
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+    const kw = encodeURIComponent(watchlist.keywords[0]);
+    const { data } = await axios.get(`https://www.govplanet.com/for-sale/search?q=${kw}&sold=0`, {
+      headers:{ 'User-Agent':'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }, timeout:12000
     });
-
     const $ = cheerio.load(data);
-    $('.search-result, .listing-card').each((_, el) => {
-      const $el = $(el);
-      const title = $el.find('h2, .listing-title').text().trim();
-      const priceText = $el.find('.current-bid, .price').text().trim();
-      const link = $el.find('a').attr('href') || '';
-      const loc = $el.find('.location, .listing-location').text().trim();
-
-      if (!title) return;
-
-      const fullUrl = link.startsWith('http') ? link : `https://www.govplanet.com${link}`;
-
-      listings.push({
-        id: `gp-${Buffer.from(fullUrl).toString('base64').slice(-20)}`,
-        source: 'GovPlanet Auction',
-        title,
-        price: extractPrice(priceText),
-        url: fullUrl,
-        location: loc || 'GovPlanet',
-        year: extractYear(title),
-        mileage: null,
-        isAuction: true,
-        auction_end: null,
+    $('.item-card,.lot-card').each((_,el) => {
+      const $el=$(el);
+      const title=$el.find('h3,h4,.title').first().text().trim();
+      const price=parseInt(($el.find('.price,.current-price').first().text().trim()).replace(/[^0-9]/g,''))||0;
+      const href=$el.find('a').first().attr('href');
+      const id=href?.match(/item\/(\d+)/)?.[1]||href?.split('/').filter(Boolean).pop();
+      if (!id||!title) return;
+      results.push({
+        id:`govplanet-${id}`, source:'GovPlanet', watchlistId:watchlist.id, watchlistName:watchlist.name,
+        title, price, url:href?.startsWith('http')?href:`https://www.govplanet.com${href}`,
+        location:$el.find('.location,.item-location').text().trim(),
+        postedAt:new Date().toISOString(), isAuction:true,
+        auctionEnd:$el.find('.ends,.auction-end').text().trim()||null
       });
     });
-
-    console.log(`  [GovPlanet] Found ${listings.length} listings`);
-  } catch (err) {
-    console.error(`  [GovPlanet] Error: ${err.message}`);
-  }
-
-  return listings;
+    await delay(1500);
+  } catch(e) { console.error('[GovPlanet]', e.message); }
+  return results;
 }
 
-async function scrapePublicSurplus(watchlist) {
-  if (watchlist.type !== 'vehicle') return [];
-  const listings = [];
-  const keywords = watchlist.keywords.join(' ');
-
+async function searchPublicSurplus(watchlist) {
+  const results = [];
+  if (watchlist.type !== 'vehicle') return results;
   try {
-    const url = `https://www.publicsurplus.com/sms/browse/search?posting=y&keyword=${encodeURIComponent(keywords)}`;
-    const { data } = await axios.get(url, {
-      timeout: 15000,
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+    const kw = encodeURIComponent(watchlist.keywords[0]);
+    const { data } = await axios.get(`https://www.publicsurplus.com/sms/browse/home?catid=0&search=${kw}`, {
+      headers:{ 'User-Agent':'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' }, timeout:12000
     });
-
     const $ = cheerio.load(data);
-    $('tr.listrow, .search-result-row').each((_, el) => {
-      const $el = $(el);
-      const title = $el.find('a').first().text().trim();
-      const priceText = $el.find('.price, td:nth-child(3)').text().trim();
-      const link = $el.find('a').attr('href') || '';
-      const loc = $el.find('.location, td:nth-child(4)').text().trim();
-
-      if (!title) return;
-
-      const fullUrl = link.startsWith('http') ? link : `https://www.publicsurplus.com${link}`;
-
-      listings.push({
-        id: `ps-${Buffer.from(fullUrl).toString('base64').slice(-20)}`,
-        source: 'PublicSurplus Auction',
-        title,
-        price: extractPrice(priceText),
-        url: fullUrl,
-        location: loc || 'PublicSurplus',
-        year: extractYear(title),
-        mileage: null,
-        isAuction: true,
-        auction_end: null,
+    $('table.auctiontbl tbody tr').each((_,el) => {
+      const $el=$(el);
+      const title=$el.find('td:nth-child(2) a').first().text().trim();
+      const href=$el.find('td:nth-child(2) a').attr('href');
+      const price=parseInt(($el.find('td:nth-child(4)').text().trim()).replace(/[^0-9]/g,''))||0;
+      const id=href?.match(/auc=(\d+)/)?.[1];
+      if (!id||!title) return;
+      results.push({
+        id:`pubsurplus-${id}`, source:'PublicSurplus', watchlistId:watchlist.id, watchlistName:watchlist.name,
+        title, price, url:href?.startsWith('http')?href:`https://www.publicsurplus.com${href}`,
+        location:$el.find('td:nth-child(3)').text().trim(),
+        postedAt:new Date().toISOString(), isAuction:true,
+        auctionEnd:$el.find('td:nth-child(5)').text().trim()||null
       });
     });
-
-    console.log(`  [PublicSurplus] Found ${listings.length} listings`);
-  } catch (err) {
-    console.error(`  [PublicSurplus] Error: ${err.message}`);
-  }
-
-  return listings;
+    await delay(1500);
+  } catch(e) { console.error('[PublicSurplus]', e.message); }
+  return results;
 }
 
-async function scrape(watchlist) {
-  const results = await Promise.allSettled([
-    scrapeCopart(watchlist),
-    scrapeIAAI(watchlist),
-    scrapeGovPlanet(watchlist),
-    scrapePublicSurplus(watchlist),
-  ]);
-
-  const listings = [];
-  for (const r of results) {
-    if (r.status === 'fulfilled') listings.push(...r.value);
-  }
-  return listings;
-}
-
-module.exports = { scrape, scrapeCopart, scrapeIAAI, scrapeGovPlanet, scrapePublicSurplus };
+module.exports = { searchCopart, searchIAAI, searchGovPlanet, searchPublicSurplus };

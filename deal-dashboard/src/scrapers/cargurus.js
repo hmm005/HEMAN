@@ -1,58 +1,47 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
-const { extractYear, extractMileage, extractPrice } = require('../alerts/matcher');
+const delay = ms => new Promise(r => setTimeout(r, ms));
 
-async function scrape(watchlist) {
-  if (watchlist.type !== 'vehicle') return [];
-
-  const listings = [];
-  const keywords = watchlist.keywords.join(' ');
-
+async function searchCarGurus(watchlist) {
+  const results = [];
+  if (watchlist.type !== 'vehicle') return results;
   try {
-    const url = `https://www.cargurus.com/Cars/inventorylisting/viewDetailsFilterViewInventoryListing.action?` +
-      `zip=35209&showNegotiable=true&sortDir=ASC&sourceContext=carGurusHomePageModel` +
-      `&distance=500&sortType=DEAL_SCORE` +
-      `&entitySelectingHelper.selectedEntity=${encodeURIComponent(keywords)}`;
+    const url = new URL('https://www.cargurus.com/Cars/inventorylisting/viewDetailsFilterViewInventoryListing.action');
+    url.searchParams.set('zip','35004'); url.searchParams.set('distance','500');
+    url.searchParams.set('sortDir','DESC'); url.searchParams.set('sortType','PRICE');
+    if (watchlist.maxPrice) url.searchParams.set('maxPrice',watchlist.maxPrice);
+    if (watchlist.minPrice) url.searchParams.set('minPrice',watchlist.minPrice);
+    if (watchlist.minYear) url.searchParams.set('minYear',watchlist.minYear);
+    if (watchlist.maxYear) url.searchParams.set('maxYear',watchlist.maxYear);
+    url.searchParams.set('trim',watchlist.keywords[0]);
 
-    const { data } = await axios.get(url, {
-      timeout: 15000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      },
+    const { data } = await axios.get(url.toString(), {
+      headers: { 'User-Agent':'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+      timeout: 15000
     });
-
     const $ = cheerio.load(data);
 
-    $('[data-cg-ft="car-blade"], .listing-row').each((_, el) => {
-      const $el = $(el);
-      const title = $el.find('h4, .listing-row__title').text().trim();
-      const priceText = $el.find('.listing-price, .cg-dealFinder-priceAndMoPayment').text().trim();
-      const mileageText = $el.find('.listing-row__mileage, .cg-listing-mileage').text().trim();
-      const link = $el.find('a').attr('href') || '';
-
-      if (!title) return;
-
-      const fullUrl = link.startsWith('http') ? link : `https://www.cargurus.com${link}`;
-
-      listings.push({
-        id: `cg-${Buffer.from(fullUrl).toString('base64').slice(-20)}`,
-        source: 'CarGurus',
-        title,
-        price: extractPrice(priceText),
-        url: fullUrl,
-        location: 'CarGurus · 500mi',
-        year: extractYear(title),
-        mileage: extractMileage(mileageText),
-        isAuction: false,
-      });
+    // Try JSON-LD structured data first
+    $('script[type="application/ld+json"]').each((_,el) => {
+      try {
+        const items = [].concat(JSON.parse($(el).html()));
+        for (const item of items) {
+          if (!['Car','Vehicle'].includes(item['@type'])) continue;
+          const id = item.url?.split('/').pop()||item.identifier; if (!id) continue;
+          results.push({
+            id:`cargurus-${id}`, source:'CarGurus', watchlistId:watchlist.id, watchlistName:watchlist.name,
+            title:`${item.modelDate||''} ${item.brand?.name||''} ${item.model||''}`.trim(),
+            price:parseInt(item.offers?.price||0), url:item.url||'',
+            location:item.offers?.availableAtOrFrom?.address?.addressLocality||'',
+            mileage:item.mileageFromOdometer?.value?`${item.mileageFromOdometer.value} mi`:'',
+            postedAt:new Date().toISOString(), isAuction:false
+          });
+        }
+      } catch(_) {}
     });
-
-    console.log(`  [CarGurus] Found ${listings.length} listings`);
-  } catch (err) {
-    console.error(`  [CarGurus] Error: ${err.message}`);
-  }
-
-  return listings;
+    await delay(2000);
+  } catch(e) { console.error('[CarGurus]', e.message); }
+  return results;
 }
 
-module.exports = { scrape };
+module.exports = { searchCarGurus };

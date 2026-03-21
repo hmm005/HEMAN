@@ -1,62 +1,36 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
-const { extractYear, extractMileage, extractPrice } = require('../alerts/matcher');
+const delay = ms => new Promise(r => setTimeout(r, ms));
 
-async function scrape(watchlist) {
-  if (watchlist.type !== 'vehicle') return [];
-
-  const listings = [];
-  const keywords = watchlist.keywords.join(' ');
-
+async function searchCarsDotCom(watchlist) {
+  const results = [];
+  if (watchlist.type !== 'vehicle') return results;
   try {
-    const url = `https://www.cars.com/shopping/results/?` +
-      `keyword=${encodeURIComponent(keywords)}` +
-      `&list_price_max=${watchlist.maxPrice || ''}` +
-      `&list_price_min=${watchlist.minPrice || ''}` +
-      `&maximum_distance=500&zip=35209` +
-      `&year_max=${watchlist.maxYear || ''}` +
-      `&year_min=${watchlist.minYear || ''}` +
-      `&sort=newest_listed&stock_type=all`;
-
+    const kw = encodeURIComponent(watchlist.keywords[0]);
+    const url = `https://www.cars.com/shopping/results/?keyword=${kw}&stock_type=all&list_price_max=${watchlist.maxPrice||''}&list_price_min=${watchlist.minPrice||''}&year_min=${watchlist.minYear||''}&year_max=${watchlist.maxYear||''}&zip=35004&maximum_distance=500&sort=best_match_desc&per_page=20`;
     const { data } = await axios.get(url, {
-      timeout: 15000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      },
+      headers: { 'User-Agent':'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' },
+      timeout: 15000
     });
-
     const $ = cheerio.load(data);
-
-    $('.vehicle-card, [data-qa="search-results-item"]').each((_, el) => {
+    $('cars-listing-card, [data-qa="listing"], .vehicle-card').each((_,el) => {
       const $el = $(el);
-      const title = $el.find('.vehicle-card-link, h2').text().trim();
-      const priceText = $el.find('.primary-price, [class*="price"]').first().text().trim();
-      const mileageText = $el.find('.mileage, [class*="mileage"]').text().trim();
-      const link = $el.find('a').attr('href') || '';
-
-      if (!title) return;
-
-      const fullUrl = link.startsWith('http') ? link : `https://www.cars.com${link}`;
-
-      listings.push({
-        id: `cc-${Buffer.from(fullUrl).toString('base64').slice(-20)}`,
-        source: 'Cars.com',
-        title,
-        price: extractPrice(priceText),
-        url: fullUrl,
-        location: 'Cars.com · 500mi',
-        year: extractYear(title),
-        mileage: extractMileage(mileageText),
-        isAuction: false,
+      const title = $el.find('[data-qa="car-name"], h2').first().text().trim();
+      const price = parseInt(($el.find('[data-qa="price"]').first().text().trim()).replace(/[^0-9]/g,''))||0;
+      const href = $el.find('a').first().attr('href');
+      const id = href?.match(/\/(\d+)\//)?.[1]||href?.split('/').filter(Boolean).pop();
+      if (!id||!title) return;
+      results.push({
+        id:`carsdotcom-${id}`, source:'Cars.com', watchlistId:watchlist.id, watchlistName:watchlist.name,
+        title, price, url:href?.startsWith('http')?href:`https://www.cars.com${href}`,
+        location:$el.find('[data-qa="dealer-name"]').text().trim(),
+        mileage:$el.find('[data-qa="mileage"]').text().trim(),
+        postedAt:new Date().toISOString(), isAuction:false
       });
     });
-
-    console.log(`  [Cars.com] Found ${listings.length} listings`);
-  } catch (err) {
-    console.error(`  [Cars.com] Error: ${err.message}`);
-  }
-
-  return listings;
+    await delay(2000);
+  } catch(e) { console.error('[Cars.com]', e.message); }
+  return results;
 }
 
-module.exports = { scrape };
+module.exports = { searchCarsDotCom };

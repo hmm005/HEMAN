@@ -1,76 +1,38 @@
 const axios = require('axios');
+const delay = ms => new Promise(r => setTimeout(r, ms));
 
-async function scrape(watchlist) {
+async function searchEbay(watchlist) {
+  const results = [];
   const appId = process.env.EBAY_APP_ID;
-  if (!appId || appId.startsWith('YourApp')) {
-    console.log('  [eBay] No API key configured — skipping');
-    return [];
-  }
+  if (!appId || appId.includes('YourApp')) { console.log('[eBay] No API key. Get free one at developer.ebay.com'); return results; }
 
-  const listings = [];
-  const keywords = watchlist.keywords.join(' ');
+  const params = new URLSearchParams({
+    'OPERATION-NAME':'findItemsByKeywords','SERVICE-VERSION':'1.0.0',
+    'SECURITY-APPNAME':appId,'RESPONSE-DATA-FORMAT':'JSON',
+    'keywords':watchlist.keywords.slice(0,3).join(' '),'categoryId':'6001',
+    'sortOrder':'StartTimeNewest','paginationInput.entriesPerPage':'25',
+  });
+  if (watchlist.maxPrice) { params.append('itemFilter(0).name','MaxPrice'); params.append('itemFilter(0).value',watchlist.maxPrice); params.append('itemFilter(0).paramName','Currency'); params.append('itemFilter(0).paramValue','USD'); }
+  if (watchlist.minPrice) { params.append('itemFilter(1).name','MinPrice'); params.append('itemFilter(1).value',watchlist.minPrice); params.append('itemFilter(1).paramName','Currency'); params.append('itemFilter(1).paramValue','USD'); }
 
   try {
-    // eBay Browse API / Finding API
-    const params = {
-      'OPERATION-NAME': 'findItemsAdvanced',
-      'SERVICE-VERSION': '1.13.0',
-      'SECURITY-APPNAME': appId,
-      'RESPONSE-DATA-FORMAT': 'JSON',
-      'REST-PAYLOAD': '',
-      'keywords': keywords,
-      'categoryId': watchlist.type === 'vehicle' ? '6001' : '11450',
-      'paginationInput.entriesPerPage': '50',
-      'sortOrder': 'StartTimeNewest',
-      'itemFilter(0).name': 'MinPrice',
-      'itemFilter(0).value': watchlist.minPrice || 0,
-      'itemFilter(1).name': 'MaxPrice',
-      'itemFilter(1).value': watchlist.maxPrice || 999999,
-      'itemFilter(2).name': 'Condition',
-      'itemFilter(2).value': '3000', // Used
-    };
-
-    const { data } = await axios.get(
-      'https://svcs.ebay.com/services/search/FindingService/v1',
-      { params, timeout: 15000 }
-    );
-
-    const response = data?.findItemsAdvancedResponse?.[0];
-    const items = response?.searchResult?.[0]?.item || [];
-
+    const { data } = await axios.get(`https://svcs.ebay.com/services/search/FindingService/v1?${params}`, { timeout: 10000 });
+    const items = data?.findItemsByKeywordsResponse?.[0]?.searchResult?.[0]?.item || [];
     for (const item of items) {
-      const title = item.title?.[0] || '';
-      const price = parseFloat(item.sellingStatus?.[0]?.currentPrice?.[0]?.__value__ || 0);
-      const url = item.viewItemURL?.[0] || '';
-      const location = item.location?.[0] || '';
-      const listingType = item.listingInfo?.[0]?.listingType?.[0] || '';
-      const endTime = item.listingInfo?.[0]?.endTime?.[0] || '';
-      const imageUrl = item.galleryURL?.[0] || '';
-      const itemId = item.itemId?.[0] || '';
-
-      const isAuction = listingType === 'Auction' || listingType === 'AuctionWithBIN';
-
-      listings.push({
-        id: `ebay-${itemId}`,
-        source: isAuction ? 'eBay Auction' : 'eBay Motors',
-        title,
-        price,
-        url,
-        location,
-        year: null,
-        mileage: null,
-        isAuction,
-        auction_end: isAuction ? new Date(endTime).toLocaleString() : null,
-        image_url: imageUrl,
+      const price = parseFloat(item?.sellingStatus?.[0]?.currentPrice?.[0]?.['__value__']||0);
+      const itemId = item?.itemId?.[0]; if (!itemId) continue;
+      const isAuction = item?.listingInfo?.[0]?.listingType?.[0]==='Auction';
+      results.push({
+        id:`ebay-${itemId}`, source:'eBay Motors', watchlistId:watchlist.id, watchlistName:watchlist.name,
+        title:item?.title?.[0]||'', price, url:item?.viewItemURL?.[0]||`https://www.ebay.com/itm/${itemId}`,
+        location:item?.location?.[0]||'', imageUrl:item?.galleryURL?.[0]||'',
+        postedAt:item?.listingInfo?.[0]?.startTime?.[0]||new Date().toISOString(),
+        isAuction, auctionEnd:isAuction?item?.listingInfo?.[0]?.endTime?.[0]:null
       });
     }
-
-    console.log(`  [eBay] Found ${listings.length} listings`);
-  } catch (err) {
-    console.error(`  [eBay] Error: ${err.message}`);
-  }
-
-  return listings;
+    await delay(500);
+  } catch(e) { console.error('[eBay]', e.message); }
+  return results;
 }
 
-module.exports = { scrape };
+module.exports = { searchEbay };

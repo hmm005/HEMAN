@@ -1,189 +1,95 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
-const { extractYear, extractMileage, extractPrice } = require('../alerts/matcher');
+const delay = ms => new Promise(r => setTimeout(r, ms));
 
-async function scrapeCarsForSale(watchlist) {
-  if (watchlist.type !== 'vehicle') return [];
-  const listings = [];
-  const keywords = watchlist.keywords.join('+');
+const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
+function parseCard($el, idPrefix, baseUrl, watchlist) {
+  const title = $el.find('h2,h3,[class*="title"]').first().text().trim();
+  const price = parseInt(($el.find('[class*="price"]').first().text().trim()).replace(/[^0-9]/g,''))||0;
+  const href = $el.find('a').first().attr('href');
+  const id = href?.split('/').filter(Boolean).pop()?.split('?')[0];
+  if (!id || !title) return null;
+  return {
+    id:`${idPrefix}-${id}`, source:idPrefix, watchlistId:watchlist.id, watchlistName:watchlist.name,
+    title, price, url:href?.startsWith('http')?href:`${baseUrl}${href}`,
+    location:$el.find('[class*="location"],[class*="dealer"]').text().trim(),
+    mileage:$el.find('[class*="mileage"],[class*="miles"]').text().trim(),
+    postedAt:new Date().toISOString(), isAuction:false
+  };
+}
+
+async function searchCarsForSale(watchlist) {
+  const results = [];
+  if (watchlist.type !== 'vehicle') return results;
   try {
-    const url = `https://www.carsforsale.com/search?keyword=${encodeURIComponent(keywords)}&zip=35209&radius=500&priceMin=${watchlist.minPrice || ''}&priceMax=${watchlist.maxPrice || ''}`;
-    const { data } = await axios.get(url, {
-      timeout: 15000,
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-    });
-
+    const kw = encodeURIComponent(watchlist.keywords[0]);
+    const url = `https://www.carsforsale.com/search?keywords=${kw}&yearmin=${watchlist.minYear||''}&yearmax=${watchlist.maxYear||''}&pricemin=${watchlist.minPrice||''}&pricemax=${watchlist.maxPrice||''}&zip=35004&distance=500`;
+    const { data } = await axios.get(url, { headers:{ 'User-Agent':UA }, timeout:15000 });
     const $ = cheerio.load(data);
-    $('.vehicle-card, .listing-row').each((_, el) => {
-      const $el = $(el);
-      const title = $el.find('h2, .vehicle-title').text().trim();
-      const priceText = $el.find('.price, .vehicle-price').text().trim();
-      const mileageText = $el.find('.mileage').text().trim();
-      const link = $el.find('a').attr('href') || '';
-
-      if (!title) return;
-
-      const fullUrl = link.startsWith('http') ? link : `https://www.carsforsale.com${link}`;
-      listings.push({
-        id: `cfs-${Buffer.from(fullUrl).toString('base64').slice(-20)}`,
-        source: 'CarsForSale',
-        title,
-        price: extractPrice(priceText),
-        url: fullUrl,
-        location: 'CarsForSale · 500mi',
-        year: extractYear(title),
-        mileage: extractMileage(mileageText),
-        isAuction: false,
-      });
+    $('[class*="vehicle-card"],[class*="listing-card"]').each((_,el) => {
+      const card = parseCard($(el), 'CarsForSale', 'https://www.carsforsale.com', watchlist);
+      if (card) results.push(card);
     });
-    console.log(`  [CarsForSale] Found ${listings.length} listings`);
-  } catch (err) {
-    console.error(`  [CarsForSale] Error: ${err.message}`);
-  }
-
-  return listings;
+    await delay(2000);
+  } catch(e) { console.error('[CarsForSale]', e.message); }
+  return results;
 }
 
-async function scrapeHemmings(watchlist) {
-  if (watchlist.type !== 'vehicle') return [];
-  const listings = [];
-  const keywords = watchlist.keywords.join('+');
-
+async function searchHemmings(watchlist) {
+  const results = [];
+  if (watchlist.type !== 'vehicle') return results;
   try {
-    const url = `https://www.hemmings.com/classifieds/cars-for-sale?q=${encodeURIComponent(keywords)}`;
-    const { data } = await axios.get(url, {
-      timeout: 15000,
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-    });
-
+    const kw = encodeURIComponent(watchlist.keywords[0]);
+    const url = `https://www.hemmings.com/classifieds/search/?keyword=${kw}&price_max=${watchlist.maxPrice||''}&year_min=${watchlist.minYear||''}&year_max=${watchlist.maxYear||''}`;
+    const { data } = await axios.get(url, { headers:{ 'User-Agent':UA }, timeout:12000 });
     const $ = cheerio.load(data);
-    $('.listing-card, .search-result-item').each((_, el) => {
-      const $el = $(el);
-      const title = $el.find('h3, .listing-title').text().trim();
-      const priceText = $el.find('.price, .listing-price').text().trim();
-      const link = $el.find('a').attr('href') || '';
-
-      if (!title) return;
-
-      const fullUrl = link.startsWith('http') ? link : `https://www.hemmings.com${link}`;
-      listings.push({
-        id: `hem-${Buffer.from(fullUrl).toString('base64').slice(-20)}`,
-        source: 'Hemmings',
-        title,
-        price: extractPrice(priceText),
-        url: fullUrl,
-        location: 'Hemmings',
-        year: extractYear(title),
-        mileage: null,
-        isAuction: false,
-      });
+    $('[class*="ClassifiedCard"],article').each((_,el) => {
+      const $el=$(el);
+      const title=$el.find('h2,h3').first().text().trim();
+      const price=parseInt(($el.find('[class*="price"]').first().text().trim()).replace(/[^0-9]/g,''))||0;
+      const href=$el.find('a').first().attr('href');
+      const id=href?.match(/\/(\d+)\/?$/)?.[1];
+      if (!id||!title) return;
+      results.push({ id:`hemmings-${id}`, source:'Hemmings', watchlistId:watchlist.id, watchlistName:watchlist.name, title, price, url:href?.startsWith('http')?href:`https://www.hemmings.com${href}`, location:$el.find('[class*="location"]').text().trim(), postedAt:new Date().toISOString(), isAuction:false });
     });
-    console.log(`  [Hemmings] Found ${listings.length} listings`);
-  } catch (err) {
-    console.error(`  [Hemmings] Error: ${err.message}`);
-  }
-
-  return listings;
+    await delay(1500);
+  } catch(e) { console.error('[Hemmings]', e.message); }
+  return results;
 }
 
-async function scrapeTruckPaper(watchlist) {
-  if (watchlist.type !== 'vehicle') return [];
-  const listings = [];
-  const keywords = watchlist.keywords.join('+');
-
+async function searchTruckPaper(watchlist) {
+  const results = [];
+  if (watchlist.type !== 'vehicle') return results;
   try {
-    const url = `https://www.truckpaper.com/listings/trucks/for-sale/list?Keyword=${encodeURIComponent(keywords)}`;
-    const { data } = await axios.get(url, {
-      timeout: 15000,
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-    });
-
+    const kw = encodeURIComponent(watchlist.keywords[0]);
+    const url = `https://www.truckpaper.com/listings/trucks/for-sale/list?keywords=${kw}&priceMax=${watchlist.maxPrice||''}&yearMin=${watchlist.minYear||''}&yearMax=${watchlist.maxYear||''}`;
+    const { data } = await axios.get(url, { headers:{ 'User-Agent':UA }, timeout:12000 });
     const $ = cheerio.load(data);
-    $('[data-listing-id], .listing-row').each((_, el) => {
-      const $el = $(el);
-      const title = $el.find('h2, .listing-title').text().trim();
-      const priceText = $el.find('.price, .listing-price').text().trim();
-      const link = $el.find('a').attr('href') || '';
-
-      if (!title) return;
-
-      const fullUrl = link.startsWith('http') ? link : `https://www.truckpaper.com${link}`;
-      listings.push({
-        id: `tp-${Buffer.from(fullUrl).toString('base64').slice(-20)}`,
-        source: 'TruckPaper',
-        title,
-        price: extractPrice(priceText),
-        url: fullUrl,
-        location: 'TruckPaper',
-        year: extractYear(title),
-        mileage: null,
-        isAuction: false,
-      });
+    $('[class*="listing"],.classified-listing').each((_,el) => {
+      const card = parseCard($(el), 'TruckPaper', 'https://www.truckpaper.com', watchlist);
+      if (card) results.push(card);
     });
-    console.log(`  [TruckPaper] Found ${listings.length} listings`);
-  } catch (err) {
-    console.error(`  [TruckPaper] Error: ${err.message}`);
-  }
-
-  return listings;
+    await delay(1500);
+  } catch(e) { console.error('[TruckPaper]', e.message); }
+  return results;
 }
 
-async function scrapeCarsDirect(watchlist) {
-  if (watchlist.type !== 'vehicle') return [];
-  const listings = [];
-  const keywords = watchlist.keywords.join('+');
-
+async function searchCarsDirect(watchlist) {
+  const results = [];
+  if (watchlist.type !== 'vehicle') return results;
   try {
-    const url = `https://www.carsdirect.com/used_cars/listings?keyword=${encodeURIComponent(keywords)}&zip=35209&radius=500`;
-    const { data } = await axios.get(url, {
-      timeout: 15000,
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-    });
-
+    const kw = encodeURIComponent(watchlist.keywords[0]);
+    const url = `https://www.carsdirect.com/cars-for-sale?q=${kw}&zipCode=35004&radius=500&priceMax=${watchlist.maxPrice||''}&yearMin=${watchlist.minYear||''}&yearMax=${watchlist.maxYear||''}`;
+    const { data } = await axios.get(url, { headers:{ 'User-Agent':UA }, timeout:12000 });
     const $ = cheerio.load(data);
-    $('.listing-card, .vehicle-card').each((_, el) => {
-      const $el = $(el);
-      const title = $el.find('h2, .vehicle-title').text().trim();
-      const priceText = $el.find('.price').text().trim();
-      const link = $el.find('a').attr('href') || '';
-
-      if (!title) return;
-
-      const fullUrl = link.startsWith('http') ? link : `https://www.carsdirect.com${link}`;
-      listings.push({
-        id: `cd-${Buffer.from(fullUrl).toString('base64').slice(-20)}`,
-        source: 'CarsDirect',
-        title,
-        price: extractPrice(priceText),
-        url: fullUrl,
-        location: 'CarsDirect',
-        year: extractYear(title),
-        mileage: null,
-        isAuction: false,
-      });
+    $('[class*="vehicle"],[class*="listing"]').each((_,el) => {
+      const card = parseCard($(el), 'CarsDirect', 'https://www.carsdirect.com', watchlist);
+      if (card) results.push(card);
     });
-    console.log(`  [CarsDirect] Found ${listings.length} listings`);
-  } catch (err) {
-    console.error(`  [CarsDirect] Error: ${err.message}`);
-  }
-
-  return listings;
+    await delay(1500);
+  } catch(e) { console.error('[CarsDirect]', e.message); }
+  return results;
 }
 
-async function scrape(watchlist) {
-  const results = await Promise.allSettled([
-    scrapeCarsForSale(watchlist),
-    scrapeHemmings(watchlist),
-    scrapeTruckPaper(watchlist),
-    scrapeCarsDirect(watchlist),
-  ]);
-
-  const listings = [];
-  for (const r of results) {
-    if (r.status === 'fulfilled') listings.push(...r.value);
-  }
-  return listings;
-}
-
-module.exports = { scrape };
+module.exports = { searchCarsForSale, searchHemmings, searchTruckPaper, searchCarsDirect };
