@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="D4D">
+  <meta name="theme-color" content="#0f1117">
+  <title>Driving for Dollars</title>
+  <link rel="manifest" href="/manifest.json">
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+  <div id="app">
+
+    <!-- ═══ Header ═══ -->
+    <div class="header">
+      <h1>🏠 D4D</h1>
+      <div class="header-actions">
+        <button class="action-btn" style="padding:6px 12px; font-size:12px;" onclick="App.refreshProperties()">↻</button>
+      </div>
+    </div>
+
+    <!-- ═══ Map View ═══ -->
+    <div id="map-view" class="view active">
+      <!-- Driving stats overlay -->
+      <div class="drive-stats">
+        <div class="stat-item">
+          <span class="stat-value" id="drive-time">0m</span>
+          <span class="stat-label">Time</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-value" id="drive-miles">0.0</span>
+          <span class="stat-label">Miles</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-value" id="drive-props">0</span>
+          <span class="stat-label">Props</span>
+        </div>
+      </div>
+
+      <!-- Map -->
+      <div id="map-container"></div>
+
+      <!-- Map controls -->
+      <div class="map-controls">
+        <button class="map-btn btn-locate" id="btn-locate" title="My Location">📍</button>
+        <button class="map-btn btn-drive" id="btn-drive"><span>&#9654;</span> Drive</button>
+        <button class="map-btn btn-add" id="btn-add-manual" title="Add Address">+ Add</button>
+      </div>
+    </div>
+
+    <!-- ═══ Properties View ═══ -->
+    <div id="properties-view" class="view">
+      <div id="filter-bar" class="filter-bar"></div>
+      <div class="search-bar">
+        <input type="text" placeholder="Search address, city, notes..."
+               oninput="PropertiesView.setSearch(this.value)">
+      </div>
+      <div id="property-list" class="property-list"></div>
+    </div>
+
+    <!-- ═══ Routes View ═══ -->
+    <div id="routes-view" class="view">
+      <div id="routes-content"></div>
+    </div>
+
+    <!-- ═══ Dashboard View ═══ -->
+    <div id="dashboard-view" class="view">
+      <div id="dashboard-content"></div>
+    </div>
+
+    <!-- ═══ Bottom Tab Bar ═══ -->
+    <nav class="tab-bar">
+      <button class="tab-btn active" data-view="map">
+        <span class="tab-icon">🗺️</span>
+        Map
+      </button>
+      <button class="tab-btn" data-view="properties">
+        <span class="tab-icon">🏠</span>
+        Properties
+      </button>
+      <button class="tab-btn" data-view="routes">
+        <span class="tab-icon">🚗</span>
+        Routes
+      </button>
+      <button class="tab-btn" data-view="dashboard">
+        <span class="tab-icon">📊</span>
+        Dashboard
+      </button>
+    </nav>
+  </div>
+
+  <!-- ═══ Property Detail Slide-Over ═���═ -->
+  <div id="property-detail" class="detail-view">
+    <div class="detail-header">
+      <button class="back-btn" onclick="PropertiesView.closeDetail()">←</button>
+      <h2 id="detail-title">Property Detail</h2>
+    </div>
+    <div id="detail-body" class="detail-body"></div>
+  </div>
+
+  <!-- ═══ Add Property Modal ═══ -->
+  <div id="add-property-modal" class="modal-overlay" onclick="if(event.target===this) this.classList.remove('open')">
+    <div class="modal">
+      <h3>Add Property by Address</h3>
+      <label>Street Address</label>
+      <input type="text" id="manual-address" placeholder="123 Main St, Birmingham, AL">
+      <div class="modal-actions">
+        <button class="btn-cancel" onclick="document.getElementById('add-property-modal').classList.remove('open')">Cancel</button>
+        <button class="btn-confirm" onclick="addPropertyManual()">Add Property</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ Skip Trace Modal ═══ -->
+  <div id="skip-trace-modal" class="modal-overlay" onclick="if(event.target===this) SkipTraceView.close()">
+    <div class="modal" style="max-height:90vh;">
+      <h3>🔍 Skip Trace</h3>
+      <label>Owner Name (if known)</label>
+      <input type="text" id="st-name" placeholder="John Smith">
+      <label>Property Address</label>
+      <input type="text" id="st-address" placeholder="123 Main St">
+      <div style="display:flex; gap:8px;">
+        <div style="flex:2">
+          <label>City</label>
+          <input type="text" id="st-city" placeholder="Birmingham">
+        </div>
+        <div style="flex:1">
+          <label>State</label>
+          <input type="text" id="st-state" placeholder="AL">
+        </div>
+        <div style="flex:1">
+          <label>ZIP</label>
+          <input type="text" id="st-zip" placeholder="35203">
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-cancel" onclick="SkipTraceView.close()">Cancel</button>
+        <button class="btn-confirm" onclick="SkipTraceView.run()">Search</button>
+      </div>
+      <div id="skip-results" style="margin-top:16px;"></div>
+    </div>
+  </div>
+
+  <!-- ═══ Contact Log Modal ═══ -->
+  <div id="contact-log-modal" class="modal-overlay" onclick="if(event.target===this) this.classList.remove('open')">
+    <div class="modal">
+      <h3>📝 Log Contact</h3>
+      <label>Contact Type</label>
+      <select id="contact-type">
+        <option value="call">Phone Call</option>
+        <option value="text">Text Message</option>
+        <option value="door_knock">Door Knock</option>
+        <option value="mail">Direct Mail</option>
+        <option value="email">Email</option>
+      </select>
+      <label>Outcome</label>
+      <select id="contact-outcome">
+        <option value="no_answer">No Answer</option>
+        <option value="left_voicemail">Left Voicemail</option>
+        <option value="spoke">Spoke With Owner</option>
+        <option value="interested">Owner Interested</option>
+        <option value="not_interested">Not Interested</option>
+      </select>
+      <label>Notes</label>
+      <textarea id="contact-notes" rows="3" placeholder="What happened?"></textarea>
+      <div class="modal-actions">
+        <button class="btn-cancel" onclick="document.getElementById('contact-log-modal').classList.remove('open')">Cancel</button>
+        <button class="btn-confirm" onclick="PropertiesView.saveContactLog()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ Scripts ═══ -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="/js/app.js"></script>
+  <script src="/js/map.js"></script>
+  <script src="/js/properties.js"></script>
+  <script src="/js/skipTrace.js"></script>
+  <script src="/js/routes.js"></script>
+
+  <!-- Service Worker Registration -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+{
+  "name": "driving-for-dollars",
+  "version": "1.0.0",
+  "description": "DealMachine-style driving for dollars app with GPS route tracking, property management, and skip tracing",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.7",
+    "better-sqlite3": "^9.4.3",
+    "dotenv": "^16.4.1",
+    "express": "^4.18.2",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.3"
+  }
+}
