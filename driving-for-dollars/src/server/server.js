@@ -154,6 +154,66 @@ function createServer() {
     res.json(database.getContacts(req.params.propertyId));
   });
 
+  // ─── Instant Lookup (tap on map → get everything) ────────
+
+  app.post('/api/lookup', async (req, res) => {
+    const { lat, lng } = req.body;
+    if (!lat || !lng) return res.status(400).json({ error: 'lat and lng required' });
+
+    // Step 1: Reverse geocode to get address
+    const geo = await reverseGeocode(lat, lng);
+    if (!geo) return res.json({
+      address: null, city: null, state: null, zip: null, lat, lng,
+      error: 'Could not find address for this location',
+      skipTrace: { freeLinks: [] }
+    });
+
+    // Step 2: Check if we already have this property
+    const existing = database.findPropertyByAddress(geo.address, geo.city, geo.state);
+
+    // Step 3: Get property data from RentCast (if API key configured)
+    let propertyData = null;
+    try {
+      propertyData = await lookupProperty(geo.address, geo.city, geo.state, geo.zip);
+    } catch (e) { /* optional */ }
+
+    // Step 4: Generate skip trace links
+    const ownerName = propertyData?.owner_name || existing?.ownerName || null;
+    const traceResult = await skipTrace({
+      name: ownerName,
+      address: geo.address,
+      city: geo.city,
+      state: geo.state,
+      zip: geo.zip
+    });
+
+    res.json({
+      address: geo.address,
+      city: geo.city,
+      state: geo.state,
+      zip: geo.zip,
+      lat: geo.lat,
+      lng: geo.lng,
+      county: geo.county,
+      // Property data (if available)
+      owner_name: propertyData?.owner_name || null,
+      beds: propertyData?.beds || null,
+      baths: propertyData?.baths || null,
+      sqft: propertyData?.sqft || null,
+      year_built: propertyData?.year_built || null,
+      estimated_value: propertyData?.estimated_value || null,
+      assessed_value: propertyData?.assessed_value || null,
+      property_type: propertyData?.property_type || null,
+      last_sale_price: propertyData?.last_sale_price || null,
+      last_sale_date: propertyData?.last_sale_date || null,
+      // Skip trace
+      skipTrace: traceResult,
+      // Already saved?
+      existingId: existing?.id || null,
+      existingStatus: existing?.status || null
+    });
+  });
+
   // ─── Utilities ──────────────────────────────────────────
 
   app.post('/api/geocode', async (req, res) => {
@@ -181,7 +241,6 @@ function createServer() {
     const data = await lookupProperty(prop.address, prop.city, prop.state, prop.zip);
     if (!data) return res.json({ message: 'No property data available. Configure RENTCAST_API_KEY for property details.' });
 
-    // Save any data we got back to the property
     database.updateProperty(prop.id, {
       beds: data.beds, baths: data.baths, sqft: data.sqft,
       year_built: data.year_built, lot_size: data.lot_size,
@@ -190,7 +249,6 @@ function createServer() {
       last_sale_date: data.last_sale_date
     });
 
-    // If we got owner info, save that too
     if (data.owner_name) {
       database.upsertOwner({
         id: uuidv4(),

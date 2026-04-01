@@ -226,6 +226,19 @@ function getProperty(id) {
   return queryOne('SELECT * FROM properties WHERE id = ?', [id]);
 }
 
+function findPropertyByAddress(address, city, state) {
+  if (!address) return null;
+  try {
+    const prop = queryOne(
+      'SELECT p.*, o.name as ownerName FROM properties p LEFT JOIN owners o ON o.property_id = p.id WHERE p.address = ? AND (p.city = ? OR p.city IS NULL) AND (p.state = ? OR p.state IS NULL) LIMIT 1',
+      [address, city || '', state || '']
+    );
+    return prop;
+  } catch (e) {
+    return null;
+  }
+}
+
 function updateProperty(id, updates) {
   const allowed = [
     'address', 'city', 'state', 'zip', 'lat', 'lng',
@@ -418,7 +431,7 @@ function getStats() {
 
 module.exports = {
   init,
-  addProperty, getProperties, getProperty, updateProperty, deleteProperty, getPropertyCount,
+  addProperty, getProperties, getProperty, findPropertyByAddress, updateProperty, deleteProperty, getPropertyCount,
   getOwner, upsertOwner,
   createSession, endSession, getSessions, getSession,
   getLists, createList, updateList,

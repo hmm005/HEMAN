@@ -1,4 +1,4 @@
-// ─── Map View (Leaflet + GPS Tracking) ─────────────────────
+// ─── Map View (Leaflet + GPS + Instant Property Lookup) ────
 const MapView = {
   map: null,
   userMarker: null,
@@ -10,29 +10,42 @@ const MapView = {
   sessionId: null,
   startTime: null,
   propertiesAdded: 0,
-  tappedLatLng: null,
-  tappedPopup: null,
+  currentPopup: null,
+  currentLookup: null, // stores the last lookup result
+  isSatellite: false,
+  streetLayer: null,
+  satelliteLayer: null,
 
   init() {
+    // Street tiles
+    this.streetLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 20,
+    });
+
+    // Satellite/aerial tiles (Esri - free, no API key)
+    this.satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      maxZoom: 20,
+      attribution: 'Esri'
+    });
+
     this.map = L.map('map-container', {
       zoomControl: false,
-      attributionControl: false
-    }).setView([33.5186, -86.8104], 13); // Birmingham, AL default
+      attributionControl: false,
+      maxZoom: 20
+    }).setView([33.5186, -86.8104], 15); // Birmingham AL, zoomed in close
 
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-    }).addTo(this.map);
+    this.streetLayer.addTo(this.map);
 
-    // Locate user on load
-    this.map.locate({ setView: true, maxZoom: 16 });
-    this.map.on('locationfound', (e) => this.onLocationFound(e));
+    // Try to get user location immediately with high accuracy
+    this.locateUser();
 
-    // Tap to get address
+    // Tap to lookup property
     this.map.on('click', (e) => this.onMapTap(e));
 
     // Bind buttons
     document.getElementById('btn-drive').addEventListener('click', () => this.toggleDriving());
     document.getElementById('btn-locate').addEventListener('click', () => this.locateUser());
+    document.getElementById('btn-satellite').addEventListener('click', () => this.toggleSatellite());
     document.getElementById('btn-add-manual').addEventListener('click', () => this.showAddManual());
   },
 
@@ -40,12 +53,45 @@ const MapView = {
     if (this.map) setTimeout(() => this.map.invalidateSize(), 100);
   },
 
-  onLocationFound(e) {
-    if (this.userMarker) {
-      this.userMarker.setLatLng(e.latlng);
+  // ── Satellite Toggle ───────────────────────────────────
+
+  toggleSatellite() {
+    const btn = document.getElementById('btn-satellite');
+    if (this.isSatellite) {
+      this.map.removeLayer(this.satelliteLayer);
+      this.streetLayer.addTo(this.map);
+      btn.textContent = '🛰️';
+      this.isSatellite = false;
     } else {
-      this.userMarker = L.circleMarker(e.latlng, {
-        radius: 8,
+      this.map.removeLayer(this.streetLayer);
+      this.satelliteLayer.addTo(this.map);
+      btn.textContent = '🗺️';
+      this.isSatellite = true;
+    }
+  },
+
+  // ── GPS Location ───────────────────────────────────────
+
+  locateUser() {
+    if (!navigator.geolocation) return;
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const latlng = [pos.coords.latitude, pos.coords.longitude];
+        this.map.setView(latlng, Math.max(this.map.getZoom(), 17));
+        this.updateUserMarker(latlng);
+      },
+      (err) => console.error('GPS error:', err.message),
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
+  },
+
+  updateUserMarker(latlng) {
+    if (this.userMarker) {
+      this.userMarker.setLatLng(latlng);
+    } else {
+      this.userMarker = L.circleMarker(latlng, {
+        radius: 10,
         fillColor: '#3b82f6',
         fillOpacity: 1,
         color: '#fff',
@@ -54,11 +100,7 @@ const MapView = {
     }
   },
 
-  locateUser() {
-    this.map.locate({ setView: true, maxZoom: 17 });
-  },
-
-  // ── GPS Driving ────────────────────────────────────────
+  // ── Driving Mode ───────────────────────────────────────
 
   async toggleDriving() {
     if (this.isDriving) {
@@ -70,7 +112,7 @@ const MapView = {
 
   async startDriving() {
     if (!navigator.geolocation) {
-      showToast('GPS not available on this device', 'error');
+      showToast('GPS not available', 'error');
       return;
     }
 
@@ -79,7 +121,6 @@ const MapView = {
     this.propertiesAdded = 0;
     this.startTime = Date.now();
 
-    // Create session on server
     try {
       const session = await api('/api/sessions', {
         method: 'POST',
@@ -87,46 +128,41 @@ const MapView = {
       });
       this.sessionId = session.id;
     } catch (err) {
-      console.error('Failed to create session:', err);
+      console.error('Session create failed:', err);
     }
 
-    // Start route line
     this.routeLine = L.polyline([], {
       color: '#3b82f6',
-      weight: 4,
+      weight: 5,
       opacity: 0.8
     }).addTo(this.map);
 
-    // Start watching position
+    // High accuracy GPS tracking
     this.watchId = navigator.geolocation.watchPosition(
       (pos) => this.onGpsUpdate(pos),
-      (err) => console.error('GPS error:', err),
-      { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
+      (err) => console.error('GPS watch error:', err),
+      { enableHighAccuracy: true, maximumAge: 3000, timeout: 15000 }
     );
 
-    // Update UI
     const btn = document.getElementById('btn-drive');
     btn.classList.add('driving');
-    btn.innerHTML = '<span>&#9632;</span> Stop';
+    btn.innerHTML = '⬛ STOP';
     document.querySelector('.drive-stats').classList.add('visible');
 
     this.updateDriveStats();
-    showToast('Driving started! Tap properties to add them.');
+    showToast('Driving! Tap any property to look it up.');
   },
 
   async stopDriving() {
     this.isDriving = false;
 
-    // Stop GPS watch
     if (this.watchId !== null) {
       navigator.geolocation.clearWatch(this.watchId);
       this.watchId = null;
     }
 
-    // Calculate distance
     const miles = this.calculateDistance();
 
-    // Save session
     if (this.sessionId) {
       try {
         await api(`/api/sessions/${this.sessionId}`, {
@@ -139,33 +175,23 @@ const MapView = {
           }
         });
       } catch (err) {
-        console.error('Failed to save session:', err);
+        console.error('Session save failed:', err);
       }
     }
 
-    // Update UI
     const btn = document.getElementById('btn-drive');
     btn.classList.remove('driving');
-    btn.innerHTML = '<span>&#9654;</span> Drive';
+    btn.innerHTML = '▶ DRIVE';
     document.querySelector('.drive-stats').classList.remove('visible');
 
-    showToast(`Drive saved! ${miles.toFixed(1)} mi, ${this.propertiesAdded} properties`);
+    showToast(`Done! ${miles.toFixed(1)} mi, ${this.propertiesAdded} properties`);
     App.loadData();
   },
 
   onGpsUpdate(pos) {
     const latlng = [pos.coords.latitude, pos.coords.longitude];
+    this.updateUserMarker(latlng);
 
-    // Update user marker
-    if (this.userMarker) {
-      this.userMarker.setLatLng(latlng);
-    } else {
-      this.userMarker = L.circleMarker(latlng, {
-        radius: 8, fillColor: '#3b82f6', fillOpacity: 1, color: '#fff', weight: 3
-      }).addTo(this.map);
-    }
-
-    // Add to route
     this.routePoints.push({
       lat: pos.coords.latitude,
       lng: pos.coords.longitude,
@@ -176,9 +202,7 @@ const MapView = {
       this.routeLine.addLatLng(latlng);
     }
 
-    // Pan map to follow user
     this.map.panTo(latlng, { animate: true });
-
     this.updateDriveStats();
   },
 
@@ -203,67 +227,124 @@ const MapView = {
     return total;
   },
 
-  // ── Tap to Add Property ────────────────────────────────
+  // ── TAP TO LOOKUP (the core DealMachine-like feature) ──
 
   async onMapTap(e) {
     const { lat, lng } = e.latlng;
-    this.tappedLatLng = { lat, lng };
 
-    // Remove previous popup
-    if (this.tappedPopup) {
-      this.map.closePopup(this.tappedPopup);
-    }
+    // Close previous popup
+    if (this.currentPopup) this.map.closePopup(this.currentPopup);
 
-    // Show loading popup
-    this.tappedPopup = L.popup()
+    // Show loading popup immediately
+    this.currentPopup = L.popup({ maxWidth: 320, minWidth: 280, className: 'lookup-popup' })
       .setLatLng(e.latlng)
-      .setContent('<div class="property-popup"><p>Looking up address...</p></div>')
+      .setContent(`
+        <div class="lp-loading">
+          <div class="lp-spinner"></div>
+          <div>Looking up property...</div>
+        </div>
+      `)
       .openOn(this.map);
 
-    // Reverse geocode
     try {
-      const geo = await api('/api/geocode', {
-        method: 'POST',
-        body: { lat, lng }
-      });
+      // ONE API call does everything: geocode + property data + skip trace
+      const data = await api('/api/lookup', { method: 'POST', body: { lat, lng } });
+      this.currentLookup = data;
 
-      if (geo) {
-        const content = `
-          <div class="property-popup">
-            <h3>${geo.address || 'Unknown Address'}</h3>
-            <p>${[geo.city, geo.state, geo.zip].filter(Boolean).join(', ')}</p>
-            <button class="popup-btn" onclick="MapView.addPropertyFromTap('${geo.address}', '${geo.city}', '${geo.state}', '${geo.zip}')">
-              + Add Property
-            </button>
+      // Build the instant popup
+      const alreadySaved = data.existingId ? `<div class="lp-saved">Already saved (${data.existingStatus})</div>` : '';
+
+      const ownerSection = data.owner_name
+        ? `<div class="lp-owner"><span class="lp-owner-label">OWNER</span> ${data.owner_name}</div>`
+        : '';
+
+      const valueSection = data.estimated_value
+        ? `<div class="lp-value">Est. $${Number(data.estimated_value).toLocaleString()}</div>`
+        : '';
+
+      const detailsSection = (data.beds || data.sqft)
+        ? `<div class="lp-details">${data.beds ? data.beds + ' bd' : ''} ${data.baths ? '/ ' + data.baths + ' ba' : ''} ${data.sqft ? '/ ' + data.sqft.toLocaleString() + ' sqft' : ''} ${data.year_built ? '/ ' + data.year_built : ''}</div>`
+        : '';
+
+      // Skip trace links
+      const links = data.skipTrace?.freeLinks || [];
+      const topLink = links.find(l => l.source === 'TruePeopleSearch (Address)') || links[0];
+
+      const content = `
+        <div class="lp-card">
+          <div class="lp-address">${data.address || 'Unknown'}</div>
+          <div class="lp-city">${[data.city, data.state, data.zip].filter(Boolean).join(', ')}</div>
+          ${ownerSection}
+          ${valueSection}
+          ${detailsSection}
+          ${alreadySaved}
+          <div class="lp-actions">
+            ${!data.existingId ? `<button class="lp-btn lp-btn-add" onclick="MapView.addFromLookup()">+ ADD LEAD</button>` : ''}
+            <button class="lp-btn lp-btn-skip" onclick="MapView.openSkipTrace()">🔍 FIND OWNER</button>
           </div>
-        `;
-        this.tappedPopup.setContent(content);
-      }
+          ${topLink ? `<a href="${topLink.url}" target="_blank" class="lp-quick-link">Quick: Search ${topLink.source} →</a>` : ''}
+        </div>
+      `;
+
+      this.currentPopup.setContent(content);
     } catch (err) {
-      this.tappedPopup.setContent('<div class="property-popup"><p>Could not find address</p></div>');
+      this.currentPopup.setContent(`
+        <div class="lp-card">
+          <div class="lp-address">Could not look up property</div>
+          <div class="lp-city">Tap again or try a different spot</div>
+        </div>
+      `);
     }
   },
 
-  async addPropertyFromTap(address, city, state, zip) {
+  async addFromLookup() {
+    const data = this.currentLookup;
+    if (!data) return;
+
     try {
       const prop = await api('/api/properties', {
         method: 'POST',
         body: {
-          address: address,
-          city: city !== 'undefined' ? city : '',
-          state: state !== 'undefined' ? state : '',
-          zip: zip !== 'undefined' ? zip : '',
-          lat: this.tappedLatLng.lat,
-          lng: this.tappedLatLng.lng,
+          address: data.address,
+          city: data.city || '',
+          state: data.state || '',
+          zip: data.zip || '',
+          lat: data.lat,
+          lng: data.lng,
           added_from: this.isDriving ? 'driving' : 'manual',
           session_id: this.sessionId || null
         }
       });
 
+      // If we got property data, save it
+      if (data.beds || data.estimated_value) {
+        await api(`/api/properties/${prop.id}`, {
+          method: 'PATCH',
+          body: {
+            beds: data.beds, baths: data.baths, sqft: data.sqft,
+            year_built: data.year_built, property_type: data.property_type,
+            estimated_value: data.estimated_value, assessed_value: data.assessed_value,
+            last_sale_price: data.last_sale_price, last_sale_date: data.last_sale_date
+          }
+        });
+      }
+
+      // If we got owner name, save it
+      if (data.owner_name) {
+        await api(`/api/owners/${prop.id}`, {
+          method: 'PATCH',
+          body: {
+            property_id: prop.id,
+            name: data.owner_name,
+            skip_trace_source: 'rentcast'
+          }
+        });
+      }
+
       this.map.closePopup();
       this.propertiesAdded++;
       this.addMarker(prop);
-      showToast(`Added: ${address}`);
+      showToast(`Added: ${data.address}`);
 
       App.properties.push(prop);
       if (this.isDriving) this.updateDriveStats();
@@ -272,18 +353,30 @@ const MapView = {
     }
   },
 
+  openSkipTrace() {
+    const data = this.currentLookup;
+    if (!data) return;
+    this.map.closePopup();
+
+    // Open skip trace modal pre-filled
+    SkipTraceView.open(
+      data.existingId || null,
+      data.address,
+      data.city,
+      data.state,
+      data.zip
+    );
+  },
+
   showAddManual() {
-    const overlay = document.getElementById('add-property-modal');
-    overlay.classList.add('open');
+    document.getElementById('add-property-modal').classList.add('open');
   },
 
   // ── Property Markers ───────────────────────────────────
 
   loadPropertyMarkers(properties) {
-    // Clear existing
     this.propertyMarkers.forEach(m => this.map.removeLayer(m));
     this.propertyMarkers = [];
-
     properties.forEach(p => this.addMarker(p));
   },
 
@@ -301,20 +394,17 @@ const MapView = {
     const color = colors[prop.status] || colors.new;
 
     const marker = L.circleMarker([prop.lat, prop.lng], {
-      radius: 7,
+      radius: 8,
       fillColor: color,
       fillOpacity: 0.9,
       color: '#fff',
       weight: 2
     }).addTo(this.map);
 
-    marker.bindPopup(`
-      <div class="property-popup">
-        <h3>${prop.address}</h3>
-        <p>${[prop.city, prop.state].filter(Boolean).join(', ')}</p>
-        <button class="popup-btn" onclick="PropertiesView.openDetail('${prop.id}')">View Details</button>
-      </div>
-    `);
+    marker.on('click', (e) => {
+      L.DomEvent.stopPropagation(e);
+      PropertiesView.openDetail(prop.id);
+    });
 
     this.propertyMarkers.push(marker);
   }
@@ -322,7 +412,7 @@ const MapView = {
 
 // ─── Haversine Distance (miles) ────────────────────────────
 function haversine(lat1, lon1, lat2, lon2) {
-  const R = 3959; // Earth radius in miles
+  const R = 3959;
   const dLat = (lat2 - lat1) * Math.PI / 180;
   const dLon = (lon2 - lon1) * Math.PI / 180;
   const a = Math.sin(dLat / 2) ** 2 +
