@@ -1,28 +1,86 @@
 const path = require('path');
 const fs = require('fs');
-const Database = require('better-sqlite3');
+const initSqlJs = require('sql.js');
 
 const DATA_DIR = path.join(__dirname, '../../data');
 const DB_PATH = path.join(DATA_DIR, 'properties.db');
 
 let db;
+let saveTimer = null;
 
-function getDb() {
-  if (!db) {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
+// sql.js returns arrays — this converts to objects
+function rowsToObjects(stmt) {
+  const cols = stmt.getColumnNames();
+  const results = [];
+  while (stmt.step()) {
+    const row = stmt.get();
+    const obj = {};
+    for (let i = 0; i < cols.length; i++) {
+      obj[cols[i]] = row[i];
     }
-    db = new Database(DB_PATH);
-    db.pragma('journal_mode = WAL');
-    db.pragma('foreign_keys = ON');
+    results.push(obj);
   }
-  return db;
+  stmt.free();
+  return results;
 }
 
-function init() {
-  const conn = getDb();
+function queryAll(sql, params = []) {
+  const stmt = db.prepare(sql);
+  stmt.bind(params);
+  return rowsToObjects(stmt);
+}
 
-  conn.exec(`
+function queryOne(sql, params = []) {
+  const rows = queryAll(sql, params);
+  return rows.length > 0 ? rows[0] : null;
+}
+
+function run(sql, params = []) {
+  db.run(sql, params);
+  scheduleSave();
+}
+
+function scheduleSave() {
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try {
+      const data = db.export();
+      const buffer = Buffer.from(data);
+      fs.writeFileSync(DB_PATH, buffer);
+    } catch (err) {
+      console.error('[DB] Save failed:', err.message);
+    }
+  }, 500);
+}
+
+function saveNow() {
+  if (saveTimer) clearTimeout(saveTimer);
+  try {
+    const data = db.export();
+    const buffer = Buffer.from(data);
+    fs.writeFileSync(DB_PATH, buffer);
+  } catch (err) {
+    console.error('[DB] Save failed:', err.message);
+  }
+}
+
+async function init() {
+  const SQL = await initSqlJs();
+
+  if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  }
+
+  if (fs.existsSync(DB_PATH)) {
+    const buffer = fs.readFileSync(DB_PATH);
+    db = new SQL.Database(buffer);
+  } else {
+    db = new SQL.Database();
+  }
+
+  db.run('PRAGMA foreign_keys = ON');
+
+  db.run(`
     CREATE TABLE IF NOT EXISTS properties (
       id TEXT PRIMARY KEY,
       address TEXT NOT NULL,
@@ -51,8 +109,10 @@ function init() {
       session_id TEXT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
+    )
+  `);
 
+  db.run(`
     CREATE TABLE IF NOT EXISTS owners (
       id TEXT PRIMARY KEY,
       property_id TEXT NOT NULL,
@@ -72,8 +132,10 @@ function init() {
       skip_trace_source TEXT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE CASCADE
-    );
+    )
+  `);
 
+  db.run(`
     CREATE TABLE IF NOT EXISTS driving_sessions (
       id TEXT PRIMARY KEY,
       name TEXT,
@@ -83,8 +145,10 @@ function init() {
       distance_miles REAL DEFAULT 0,
       properties_added INTEGER DEFAULT 0,
       notes TEXT
-    );
+    )
+  `);
 
+  db.run(`
     CREATE TABLE IF NOT EXISTS lists (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -92,8 +156,10 @@ function init() {
       color TEXT DEFAULT '#3b82f6',
       property_count INTEGER DEFAULT 0,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
+    )
+  `);
 
+  db.run(`
     CREATE TABLE IF NOT EXISTS contact_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       property_id TEXT NOT NULL,
@@ -104,33 +170,32 @@ function init() {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE CASCADE,
       FOREIGN KEY (owner_id) REFERENCES owners(id) ON DELETE SET NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_properties_status ON properties(status);
-    CREATE INDEX IF NOT EXISTS idx_properties_list ON properties(list_id);
-    CREATE INDEX IF NOT EXISTS idx_properties_session ON properties(session_id);
-    CREATE INDEX IF NOT EXISTS idx_properties_created ON properties(created_at);
-    CREATE INDEX IF NOT EXISTS idx_owners_property ON owners(property_id);
-    CREATE INDEX IF NOT EXISTS idx_contacts_property ON contact_log(property_id);
-    CREATE INDEX IF NOT EXISTS idx_sessions_started ON driving_sessions(started_at);
+    )
   `);
 
+  db.run('CREATE INDEX IF NOT EXISTS idx_properties_status ON properties(status)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_properties_list ON properties(list_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_properties_session ON properties(session_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_properties_created ON properties(created_at)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_owners_property ON owners(property_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_contacts_property ON contact_log(property_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_sessions_started ON driving_sessions(started_at)');
+
+  saveNow();
   console.log('[DB] Database initialized');
 }
 
 // ─── Properties ──────────────────────────────────────────────
 
-const _addProperty = () => getDb().prepare(`
-  INSERT OR IGNORE INTO properties (id, address, city, state, zip, lat, lng, status, distress_indicators, notes, added_from, session_id, list_id)
-  VALUES (?, ?, ?, ?, ?, ?, ?, 'new', '[]', '', ?, ?, ?)
-`);
-
 function addProperty(prop) {
-  return _addProperty().run(
+  run(`
+    INSERT OR IGNORE INTO properties (id, address, city, state, zip, lat, lng, status, distress_indicators, notes, added_from, session_id, list_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'new', '[]', '', ?, ?, ?)
+  `, [
     prop.id, prop.address, prop.city || null, prop.state || null, prop.zip || null,
     prop.lat || null, prop.lng || null, prop.added_from || 'driving',
     prop.session_id || null, prop.list_id || null
-  );
+  ]);
 }
 
 function getProperties({ status, list_id, search, limit = 50, offset = 0 } = {}) {
@@ -154,11 +219,11 @@ function getProperties({ status, list_id, search, limit = 50, offset = 0 } = {})
   sql += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
   params.push(limit, offset);
 
-  return getDb().prepare(sql).all(...params);
+  return queryAll(sql, params);
 }
 
 function getProperty(id) {
-  return getDb().prepare('SELECT * FROM properties WHERE id = ?').get(id);
+  return queryOne('SELECT * FROM properties WHERE id = ?', [id]);
 }
 
 function updateProperty(id, updates) {
@@ -185,25 +250,25 @@ function updateProperty(id, updates) {
   sets.push('updated_at = CURRENT_TIMESTAMP');
   params.push(id);
 
-  return getDb().prepare(`UPDATE properties SET ${sets.join(', ')} WHERE id = ?`).run(...params);
+  run(`UPDATE properties SET ${sets.join(', ')} WHERE id = ?`, params);
 }
 
 function deleteProperty(id) {
-  return getDb().prepare('DELETE FROM properties WHERE id = ?').run(id);
+  run('DELETE FROM properties WHERE id = ?', [id]);
 }
 
 function getPropertyCount() {
-  return getDb().prepare('SELECT COUNT(*) as count FROM properties').get().count;
+  return queryOne('SELECT COUNT(*) as count FROM properties').count;
 }
 
 // ─── Owners ──────────────────────────────────────────────────
 
 function getOwner(propertyId) {
-  return getDb().prepare('SELECT * FROM owners WHERE property_id = ?').get(propertyId);
+  return queryOne('SELECT * FROM owners WHERE property_id = ?', [propertyId]);
 }
 
 function upsertOwner(owner) {
-  const existing = getDb().prepare('SELECT id FROM owners WHERE property_id = ?').get(owner.property_id);
+  const existing = queryOne('SELECT id FROM owners WHERE property_id = ?', [owner.property_id]);
 
   if (existing) {
     const sets = [];
@@ -220,73 +285,73 @@ function upsertOwner(owner) {
     }
     if (sets.length === 0) return existing;
     params.push(existing.id);
-    getDb().prepare(`UPDATE owners SET ${sets.join(', ')} WHERE id = ?`).run(...params);
-    return getDb().prepare('SELECT * FROM owners WHERE id = ?').get(existing.id);
+    run(`UPDATE owners SET ${sets.join(', ')} WHERE id = ?`, params);
+    return queryOne('SELECT * FROM owners WHERE id = ?', [existing.id]);
   } else {
-    getDb().prepare(`
+    run(`
       INSERT INTO owners (id, property_id, name, mailing_address, mailing_city, mailing_state, mailing_zip,
         phone1, phone2, phone3, email1, email2, skip_traced_at, skip_trace_source)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    `, [
       owner.id, owner.property_id, owner.name || null,
       owner.mailing_address || null, owner.mailing_city || null,
       owner.mailing_state || null, owner.mailing_zip || null,
       owner.phone1 || null, owner.phone2 || null, owner.phone3 || null,
       owner.email1 || null, owner.email2 || null,
       owner.skip_traced_at || null, owner.skip_trace_source || null
-    );
-    return getDb().prepare('SELECT * FROM owners WHERE id = ?').get(owner.id);
+    ]);
+    return queryOne('SELECT * FROM owners WHERE id = ?', [owner.id]);
   }
 }
 
 // ─── Driving Sessions ────────────────────────────────────────
 
 function createSession(session) {
-  getDb().prepare(`
+  run(`
     INSERT INTO driving_sessions (id, name, started_at, route_points)
     VALUES (?, ?, ?, '[]')
-  `).run(session.id, session.name || null, session.started_at || new Date().toISOString());
-  return getDb().prepare('SELECT * FROM driving_sessions WHERE id = ?').get(session.id);
+  `, [session.id, session.name || null, session.started_at || new Date().toISOString()]);
+  return queryOne('SELECT * FROM driving_sessions WHERE id = ?', [session.id]);
 }
 
 function endSession(id, data) {
-  getDb().prepare(`
+  run(`
     UPDATE driving_sessions SET ended_at = ?, route_points = ?, distance_miles = ?, properties_added = ?, notes = ?
     WHERE id = ?
-  `).run(
+  `, [
     data.ended_at || new Date().toISOString(),
     data.route_points || '[]',
     data.distance_miles || 0,
     data.properties_added || 0,
     data.notes || null,
     id
-  );
-  return getDb().prepare('SELECT * FROM driving_sessions WHERE id = ?').get(id);
+  ]);
+  return queryOne('SELECT * FROM driving_sessions WHERE id = ?', [id]);
 }
 
 function getSessions(limit = 50) {
-  return getDb().prepare('SELECT * FROM driving_sessions ORDER BY started_at DESC LIMIT ?').all(limit);
+  return queryAll('SELECT * FROM driving_sessions ORDER BY started_at DESC LIMIT ?', [limit]);
 }
 
 function getSession(id) {
-  return getDb().prepare('SELECT * FROM driving_sessions WHERE id = ?').get(id);
+  return queryOne('SELECT * FROM driving_sessions WHERE id = ?', [id]);
 }
 
 // ─── Lists ───────────────────────────────────────────────────
 
 function getLists() {
-  const lists = getDb().prepare('SELECT * FROM lists ORDER BY created_at DESC').all();
+  const lists = queryAll('SELECT * FROM lists ORDER BY created_at DESC');
   for (const list of lists) {
-    list.property_count = getDb().prepare('SELECT COUNT(*) as c FROM properties WHERE list_id = ?').get(list.id).c;
+    list.property_count = queryOne('SELECT COUNT(*) as c FROM properties WHERE list_id = ?', [list.id]).c;
   }
   return lists;
 }
 
 function createList(list) {
-  getDb().prepare('INSERT INTO lists (id, name, description, color) VALUES (?, ?, ?, ?)').run(
+  run('INSERT INTO lists (id, name, description, color) VALUES (?, ?, ?, ?)', [
     list.id, list.name, list.description || null, list.color || '#3b82f6'
-  );
-  return getDb().prepare('SELECT * FROM lists WHERE id = ?').get(list.id);
+  ]);
+  return queryOne('SELECT * FROM lists WHERE id = ?', [list.id]);
 }
 
 function updateList(id, updates) {
@@ -300,47 +365,41 @@ function updateList(id, updates) {
   }
   if (sets.length === 0) return null;
   params.push(id);
-  getDb().prepare(`UPDATE lists SET ${sets.join(', ')} WHERE id = ?`).run(...params);
-  return getDb().prepare('SELECT * FROM lists WHERE id = ?').get(id);
+  run(`UPDATE lists SET ${sets.join(', ')} WHERE id = ?`, params);
+  return queryOne('SELECT * FROM lists WHERE id = ?', [id]);
 }
 
 // ─── Contact Log ─────────────────────────────────────────────
 
 function addContact(entry) {
-  getDb().prepare(`
+  run(`
     INSERT INTO contact_log (property_id, owner_id, type, outcome, notes)
     VALUES (?, ?, ?, ?, ?)
-  `).run(entry.property_id, entry.owner_id || null, entry.type, entry.outcome || null, entry.notes || null);
+  `, [entry.property_id, entry.owner_id || null, entry.type, entry.outcome || null, entry.notes || null]);
 
-  // Update owner contact count
   if (entry.owner_id) {
-    getDb().prepare(`
+    run(`
       UPDATE owners SET contact_count = contact_count + 1, last_contacted = CURRENT_TIMESTAMP
       WHERE id = ?
-    `).run(entry.owner_id);
+    `, [entry.owner_id]);
   }
 
-  return getDb().prepare('SELECT * FROM contact_log WHERE property_id = ? ORDER BY created_at DESC').all(entry.property_id);
+  return queryAll('SELECT * FROM contact_log WHERE property_id = ? ORDER BY created_at DESC', [entry.property_id]);
 }
 
 function getContacts(propertyId) {
-  return getDb().prepare('SELECT * FROM contact_log WHERE property_id = ? ORDER BY created_at DESC').all(propertyId);
+  return queryAll('SELECT * FROM contact_log WHERE property_id = ? ORDER BY created_at DESC', [propertyId]);
 }
 
 // ─── Stats ───────────────────────────────────────────────────
 
 function getStats() {
-  const conn = getDb();
-  const total = conn.prepare('SELECT COUNT(*) as c FROM properties').get().c;
-  const byStatus = conn.prepare(`
-    SELECT status, COUNT(*) as count FROM properties GROUP BY status
-  `).all();
-  const thisWeek = conn.prepare(`
-    SELECT COUNT(*) as c FROM contact_log WHERE created_at >= datetime('now', '-7 days')
-  `).get().c;
-  const totalSessions = conn.prepare('SELECT COUNT(*) as c FROM driving_sessions').get().c;
-  const totalMiles = conn.prepare('SELECT COALESCE(SUM(distance_miles), 0) as m FROM driving_sessions').get().m;
-  const skipTraced = conn.prepare('SELECT COUNT(*) as c FROM owners WHERE skip_traced_at IS NOT NULL').get().c;
+  const total = queryOne('SELECT COUNT(*) as c FROM properties').c;
+  const byStatus = queryAll('SELECT status, COUNT(*) as count FROM properties GROUP BY status');
+  const thisWeek = queryOne("SELECT COUNT(*) as c FROM contact_log WHERE created_at >= datetime('now', '-7 days')").c;
+  const totalSessions = queryOne('SELECT COUNT(*) as c FROM driving_sessions').c;
+  const totalMiles = queryOne('SELECT COALESCE(SUM(distance_miles), 0) as m FROM driving_sessions').m;
+  const skipTraced = queryOne('SELECT COUNT(*) as c FROM owners WHERE skip_traced_at IS NOT NULL').c;
 
   const statusMap = {};
   for (const row of byStatus) {
@@ -359,16 +418,10 @@ function getStats() {
 
 module.exports = {
   init,
-  // Properties
   addProperty, getProperties, getProperty, updateProperty, deleteProperty, getPropertyCount,
-  // Owners
   getOwner, upsertOwner,
-  // Sessions
   createSession, endSession, getSessions, getSession,
-  // Lists
   getLists, createList, updateList,
-  // Contacts
   addContact, getContacts,
-  // Stats
   getStats
 };

@@ -4,14 +4,20 @@ const database = require('./db/database');
 
 const PORT = parseInt(process.env.PORT) || 3001;
 
-// Ensure database is initialized
-database.init();
+async function start() {
+  await database.init();
 
-const app = createServer();
+  const app = createServer();
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n🏠 Driving for Dollars is running!`);
-  console.log(`   Local:   http://localhost:${PORT}`);
-  console.log(`   Network: http://0.0.0.0:${PORT}`);
-  console.log(`\n   Open on your iPhone and "Add to Home Screen" for the full app experience.\n`);
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`\n🏠 Driving for Dollars is running!`);
+    console.log(`   Local:   http://localhost:${PORT}`);
+    console.log(`   Network: http://0.0.0.0:${PORT}`);
+    console.log(`\n   Open on your iPhone and "Add to Home Screen" for the full app experience.\n`);
+  });
+}
+
+start().catch(err => {
+  console.error('Failed to start:', err);
+  process.exit(1);
 });
