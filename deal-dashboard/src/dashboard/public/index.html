@@ -292,6 +292,106 @@
       .stats-grid { grid-template-columns: repeat(2, 1fr); }
       header { padding: 12px; }
     }
+
+    .tab-bar {
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px;
+      display: flex;
+      gap: 4px;
+    }
+
+    .tab-btn {
+      background: none;
+      border: none;
+      border-bottom: 3px solid transparent;
+      color: var(--muted);
+      padding: 12px 18px;
+      border-radius: 0;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      transition: color 0.2s, border-color 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .tab-btn.active { color: var(--text); border-bottom-color: var(--accent); }
+    .tab-btn:hover { opacity: 1; color: var(--text); }
+
+    .badge {
+      background: var(--orange);
+      color: #000;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 1px 6px;
+      border-radius: 10px;
+      min-width: 18px;
+      text-align: center;
+    }
+
+    .leads-table-wrap {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+      overflow-x: auto;
+    }
+
+    .leads-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .leads-table th {
+      text-align: left;
+      padding: 12px 14px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+      background: rgba(255,255,255,0.02);
+      white-space: nowrap;
+    }
+
+    .leads-table td {
+      padding: 10px 14px;
+      border-bottom: 1px solid rgba(42,45,58,0.5);
+      color: var(--text);
+      vertical-align: middle;
+    }
+
+    .leads-table tr:last-child td { border-bottom: none; }
+    .leads-table tr:hover td { background: rgba(255,255,255,0.02); }
+
+    .call-reminders-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+
+    .reminder-card {
+      background: rgba(245,158,11,0.08);
+      border: 1px solid var(--orange);
+      border-radius: 10px;
+      padding: 16px;
+    }
+
+    .reminder-name { font-weight: 700; font-size: 15px; margin-bottom: 4px; }
+    .reminder-phone { color: var(--green); font-size: 18px; font-weight: 700; margin-bottom: 4px; }
+    .reminder-address { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+    .reminder-date { color: var(--muted); font-size: 11px; }
+
+    .section-heading {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--orange);
+      margin: 20px 0 12px;
+    }
   </style>
 </head>
 <body>
@@ -305,6 +405,15 @@
     </div>
   </header>
 
+  <div class="tab-bar">
+    <button class="tab-btn active" data-tab="deals" onclick="switchTab('deals')">Deals</button>
+    <button class="tab-btn" data-tab="leads" onclick="switchTab('leads')" id="leadsTabBtn">
+      Leads Pipeline
+      <span class="badge" id="reminderBadge" style="display:none">0</span>
+    </button>
+  </div>
+
+  <div id="tab-deals" class="tab-content">
   <div class="container">
     <!-- Stats -->
     <div class="stats-grid" id="statsGrid">
@@ -352,6 +461,57 @@
         <h3>No listings yet</h3>
         <p>Click SCAN NOW to start searching, or wait for the next scheduled scan.</p>
       </div>
+    </div>
+  </div>
+  </div>
+
+  <!-- Leads Pipeline Tab -->
+  <div id="tab-leads" class="tab-content" style="display:none">
+    <div class="container">
+
+      <!-- Call Reminders -->
+      <div id="callRemindersSection" style="display:none">
+        <div class="section-heading">📞 Call Reminders — Don't forget to call!</div>
+        <div class="call-reminders-grid" id="callRemindersGrid"></div>
+      </div>
+
+      <!-- Status Filters -->
+      <div class="filters" id="leadFilters" style="margin-bottom:16px">
+        <button class="filter-btn active" data-status="all">All</button>
+        <button class="filter-btn" data-status="new">New</button>
+        <button class="filter-btn" data-status="active">Active</button>
+        <button class="filter-btn" data-status="replied">Replied</button>
+        <button class="filter-btn" data-status="dnc">DNC</button>
+        <button class="filter-btn" data-status="closed">Closed</button>
+      </div>
+
+      <!-- Leads Table -->
+      <div class="leads-table-wrap">
+        <table class="leads-table">
+          <thead>
+            <tr>
+              <th>Owner</th>
+              <th>Property</th>
+              <th>City</th>
+              <th>Email</th>
+              <th>Phone</th>
+              <th>Type</th>
+              <th>Status</th>
+              <th>Last Contact</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="leadsTableBody">
+            <tr>
+              <td colspan="9" style="text-align:center;padding:48px;color:var(--muted)">
+                No leads yet — import a CSV:<br>
+                <code style="color:var(--accent);font-size:12px">npm run import data/imports/leads.csv</code>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
     </div>
   </div>
 
@@ -602,6 +762,133 @@
 
     // Auto-refresh every 60 seconds
     setInterval(() => { loadListings(); loadStats(); }, 60000);
+
+    // Poll for pending call reminders badge every 60s (shows even on Deals tab)
+    async function refreshReminderBadge() {
+      try {
+        const res = await fetch('/api/call-reminders');
+        const reminders = await res.json();
+        const badge = document.getElementById('reminderBadge');
+        if (reminders.length) {
+          badge.textContent = reminders.length;
+          badge.style.display = 'inline';
+        } else {
+          badge.style.display = 'none';
+        }
+      } catch (e) {}
+    }
+    refreshReminderBadge();
+    setInterval(refreshReminderBadge, 60000);
+
+    // ---- Leads Pipeline ----
+
+    let currentLeadStatus = 'all';
+
+    function switchTab(tab) {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(t => { t.style.display = 'none'; });
+      document.querySelector(`.tab-btn[data-tab="${tab}"]`).classList.add('active');
+      document.getElementById(`tab-${tab}`).style.display = '';
+      if (tab === 'leads') { loadLeads(); loadCallReminders(); }
+    }
+
+    async function loadLeads() {
+      try {
+        const params = new URLSearchParams();
+        if (currentLeadStatus !== 'all') params.set('status', currentLeadStatus);
+        const res = await fetch('/api/leads?' + params);
+        renderLeadsTable(await res.json());
+      } catch (e) { console.error('Failed to load leads', e); }
+    }
+
+    function renderLeadsTable(leads) {
+      const tbody = document.getElementById('leadsTableBody');
+      if (!leads.length) {
+        tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--muted)">No leads found.</td></tr>';
+        return;
+      }
+      const statusColors = {
+        new: 'var(--muted)', active: 'var(--accent)',
+        replied: 'var(--green)', dnc: 'var(--red)', closed: 'var(--purple)'
+      };
+      tbody.innerHTML = leads.map(l => {
+        const color = statusColors[l.status] || 'var(--muted)';
+        const canAct = l.status === 'active' || l.status === 'new';
+        const contact = l.last_contact ? new Date(l.last_contact).toLocaleDateString() : '—';
+        const email = l.email
+          ? `<a href="mailto:${l.email}" style="color:var(--accent)">${l.email}</a>`
+          : '<span style="color:var(--muted)">—</span>';
+        return `<tr>
+          <td style="white-space:nowrap">${l.first_name || ''} ${l.last_name || ''}</td>
+          <td>${l.property_address || '—'}</td>
+          <td style="white-space:nowrap">${l.city || ''}${l.state ? ', ' + l.state : ''}</td>
+          <td style="font-size:12px">${email}</td>
+          <td style="white-space:nowrap">${l.phone || '—'}</td>
+          <td style="font-size:12px;color:var(--muted)">${l.property_type || '—'}</td>
+          <td><span style="color:${color};font-weight:600;text-transform:uppercase;font-size:11px">${l.status}</span></td>
+          <td style="white-space:nowrap;font-size:12px;color:var(--muted)">${contact}</td>
+          <td style="white-space:nowrap">${canAct ? `
+            <button class="secondary" style="font-size:11px;padding:3px 8px"
+              onclick="markLeadReplied('${l.id}')">Replied</button>
+            <button class="danger" style="font-size:11px;padding:3px 8px;margin-left:4px"
+              onclick="markLeadDnc('${l.id}')">DNC</button>
+          ` : ''}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    async function loadCallReminders() {
+      try {
+        const res = await fetch('/api/call-reminders');
+        const reminders = await res.json();
+        const section = document.getElementById('callRemindersSection');
+        const grid = document.getElementById('callRemindersGrid');
+        const badge = document.getElementById('reminderBadge');
+
+        if (reminders.length) {
+          badge.textContent = reminders.length;
+          badge.style.display = 'inline';
+          section.style.display = '';
+          grid.innerHTML = reminders.map(r => `
+            <div class="reminder-card">
+              <div class="reminder-name">${r.owner_name || 'Unknown'}</div>
+              <div class="reminder-phone">${r.phone || 'No phone on file'}</div>
+              <div class="reminder-address">${r.property_address || ''}</div>
+              <div class="reminder-date">Added: ${new Date(r.created_at).toLocaleDateString()}</div>
+              <button onclick="dismissReminder(${r.id})"
+                style="margin-top:10px;width:100%;background:var(--green)">Done — Called</button>
+            </div>
+          `).join('');
+        } else {
+          badge.style.display = 'none';
+          section.style.display = 'none';
+        }
+      } catch (e) { console.error('Failed to load reminders', e); }
+    }
+
+    async function markLeadReplied(id) {
+      await fetch(`/api/leads/${id}/replied`, { method: 'POST' });
+      loadLeads();
+    }
+
+    async function markLeadDnc(id) {
+      await fetch(`/api/leads/${id}/dnc`, { method: 'POST' });
+      loadLeads();
+    }
+
+    async function dismissReminder(id) {
+      await fetch(`/api/call-reminders/${id}/done`, { method: 'POST' });
+      loadCallReminders();
+      refreshReminderBadge();
+    }
+
+    document.getElementById('leadFilters').addEventListener('click', e => {
+      if (!e.target.classList.contains('filter-btn')) return;
+      document.querySelectorAll('#leadFilters .filter-btn').forEach(b => b.classList.remove('active'));
+      e.target.classList.add('active');
+      currentLeadStatus = e.target.dataset.status;
+      loadLeads();
+    });
   </script>
 </body>
 </html>

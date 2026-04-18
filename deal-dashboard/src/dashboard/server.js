@@ -56,6 +56,40 @@ app.patch('/api/watchlists/:id', (req, res) => {
   res.json({ ok: true, watchlist: watchlists[idx] });
 });
 
+// API: Get leads
+app.get('/api/leads', (req, res) => {
+  const { status } = req.query;
+  res.json(database.getLeads(status || null));
+});
+
+// API: Mark lead replied
+app.post('/api/leads/:id/replied', (req, res) => {
+  database.updateLeadStatus(req.params.id, 'replied');
+  res.json({ ok: true });
+});
+
+// API: Mark lead DNC
+app.post('/api/leads/:id/dnc', (req, res) => {
+  database.updateLeadStatus(req.params.id, 'dnc');
+  res.json({ ok: true });
+});
+
+// API: Get pending call reminders
+app.get('/api/call-reminders', (req, res) => {
+  res.json(database.getPendingCallReminders());
+});
+
+// API: Dismiss call reminder
+app.post('/api/call-reminders/:id/done', (req, res) => {
+  database.dismissCallReminder(parseInt(req.params.id));
+  res.json({ ok: true });
+});
+
+// API: Lead stats
+app.get('/api/lead-stats', (req, res) => {
+  res.json(database.getLeadStats());
+});
+
 // API: Trigger scan
 let scanFn = null;
 app.post('/api/scan', async (req, res) => {

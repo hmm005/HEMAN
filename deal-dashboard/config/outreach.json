@@ -1,0 +1,14 @@
+{
+  "warmupSchedule": [
+    { "maxWeek": 2, "dailyLimit": 5 },
+    { "maxWeek": 4, "dailyLimit": 15 },
+    { "maxWeek": 6, "dailyLimit": 30 },
+    { "maxWeek": 9999, "dailyLimit": 50 }
+  ],
+  "sequence": [
+    { "step": 0, "dayOffset": 0,  "channel": "email" },
+    { "step": 1, "dayOffset": 7,  "channel": "email" },
+    { "step": 2, "dayOffset": 21, "channel": "email" },
+    { "step": 3, "dayOffset": 25, "channel": "call_reminder" }
+  ]
+}
